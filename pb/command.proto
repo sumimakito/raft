@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+option go_package = "github.com/sumimakito/raft/pb";
+
+package pb;
+
+message Command { bytes data = 1; }

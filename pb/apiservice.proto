@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+import "command.proto";
+import "log.proto";
+
+option go_package = "github.com/sumimakito/raft/pb";
+
+package pb;
+
+service APIService {
+  rpc Apply(LogBody) returns (ApplyLogResponse);
+  rpc ApplyCommand(Command) returns (ApplyLogResponse);
+}
+
+message ApplyLogResponse {
+  LogMeta meta = 1;
+  string error = 2;
+}
