@@ -28,54 +28,54 @@ type RPCResponse struct {
 }
 
 type AppendEntriesRequest struct {
-	Term         uint64   `json:"term"`
-	LeaderID     ServerID `json:"leader_id"`
-	LeaderCommit uint64   `json:"leader_commit"`
-	PrevLogTerm  uint64   `json:"prev_log_term"`
-	PrevLogIndex uint64   `json:"prev_log_index"`
-	Entries      []*Log   `json:"entries"`
+	Term         uint64   `json:"term" codec:"term"`
+	LeaderID     ServerID `json:"leader_id" codec:"leader_id"`
+	LeaderCommit uint64   `json:"leader_commit" codec:"leader_commit"`
+	PrevLogTerm  uint64   `json:"prev_log_term" codec:"prev_log_term"`
+	PrevLogIndex uint64   `json:"prev_log_index" codec:"prev_log_index"`
+	Entries      []*Log   `json:"entries" codec:"entries"`
 }
 
 type AppendEntriesResponse struct {
-	ServerID ServerID `json:"server_id"`
-	Term     uint64   `json:"term"`
-	Success  bool     `json:"success"`
+	ServerID ServerID `json:"server_id" codec:"server_id"`
+	Term     uint64   `json:"term" codec:"term"`
+	Success  bool     `json:"success" codec:"success"`
 }
 
 type RequestVoteRequest struct {
-	Term         uint64   `json:"term"`
-	CandidateID  ServerID `json:"candidate_id"`
-	LastLogTerm  uint64   `json:"last_log_term"`
-	LastLogIndex uint64   `json:"last_log_index"`
+	Term         uint64   `json:"term" codec:"term"`
+	CandidateID  ServerID `json:"candidate_id" codec:"candidate_id"`
+	LastLogTerm  uint64   `json:"last_log_term" codec:"last_log_term"`
+	LastLogIndex uint64   `json:"last_log_index" codec:"last_log_index"`
 }
 
 type RequestVoteResponse struct {
-	ServerID    ServerID `json:"server_id"`
-	Term        uint64   `json:"term"`
-	VoteGranted bool     `json:"vote_granted"`
+	ServerID    ServerID `json:"server_id" codec:"server_id"`
+	Term        uint64   `json:"term" codec:"term"`
+	VoteGranted bool     `json:"vote_granted" codec:"vote_granted"`
 }
 
 type InstallSnapshotRequest struct {
-	Term              uint64   `json:"term"`
-	LeaderID          ServerID `json:"leader_id"`
-	LastIncludedIndex uint64   `json:"last_included_index"`
-	LastIncludedTerm  uint64   `json:"last_included_term"`
-	Offset            uint64   `json:"offset"`
-	Data              []byte   `json:"data"`
-	Done              bool     `json:"done"`
+	Term              uint64   `json:"term" codec:"term"`
+	LeaderID          ServerID `json:"leader_id" codec:"leader_id"`
+	LastIncludedIndex uint64   `json:"last_included_index" codec:"last_included_index"`
+	LastIncludedTerm  uint64   `json:"last_included_term" codec:"last_included_term"`
+	Offset            uint64   `json:"offset" codec:"offset"`
+	Data              []byte   `json:"data" codec:"data"`
+	Done              bool     `json:"done" codec:"done"`
 }
 
 type InstallSnapshotResponse struct {
-	Term uint64 `json:"term"`
+	Term uint64 `json:"term" codec:"term"`
 }
 
 type ApplyLogRequest struct {
-	Body LogBody `json:"body"`
+	Body LogBody `json:"body" codec:"body"`
 }
 
 type ApplyLogResponse struct {
-	Meta  *LogMeta `json:"meta"`
-	Error error    `json:"error"`
+	Meta  *LogMeta `json:"meta" codec:"meta"`
+	Error error    `json:"error" codec:"error"`
 }
 
 type rpcHandler struct {
@@ -215,6 +215,13 @@ func (h *rpcHandler) RequestVote(ctx context.Context, requestID string, request 
 
 	response.VoteGranted = true
 	return response, nil
+}
+
+func (h *rpcHandler) InstallSnapshot(
+	ctx context.Context, requestID string, request *InstallSnapshotRequest,
+) (*InstallSnapshotRequest, error) {
+	h.server.logger.Infow("incoming RPC: InstallSnapshot",
+		logFields(h.server, "request_id", requestID, "request", request)...)
 }
 
 func (h *rpcHandler) ApplyLog(ctx context.Context, requestID string, request *ApplyLogRequest) (*ApplyLogResponse, error) {
