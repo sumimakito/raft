@@ -55,6 +55,20 @@ type RequestVoteResponse struct {
 	VoteGranted bool     `json:"vote_granted"`
 }
 
+type InstallSnapshotRequest struct {
+	Term              uint64   `json:"term"`
+	LeaderID          ServerID `json:"leader_id"`
+	LastIncludedIndex uint64   `json:"last_included_index"`
+	LastIncludedTerm  uint64   `json:"last_included_term"`
+	Offset            uint64   `json:"offset"`
+	Data              []byte   `json:"data"`
+	Done              bool     `json:"done"`
+}
+
+type InstallSnapshotResponse struct {
+	Term uint64 `json:"term"`
+}
+
 type ApplyLogRequest struct {
 	Body LogBody `json:"body"`
 }

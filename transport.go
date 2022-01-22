@@ -10,6 +10,7 @@ type Transport interface {
 
 	AppendEntries(ctx context.Context, peer Peer, request *AppendEntriesRequest) (*AppendEntriesResponse, error)
 	RequestVote(ctx context.Context, peer Peer, request *RequestVoteRequest) (*RequestVoteResponse, error)
+	InstallSnapshot(ctx context.Context, peer Peer, request *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
 	ApplyLog(ctx context.Context, peer Peer, request *ApplyLogRequest) (*ApplyLogResponse, error)
 
 	RPC() <-chan *RPC

@@ -39,6 +39,17 @@ func (s *RPCService) RequestVote(request *raft.RequestVoteRequest, response *raf
 	return nil
 }
 
+func (s *RPCService) InstallSnapshot(request *raft.InstallSnapshotRequest, response *raft.InstallSnapshotResponse) error {
+	rpc := raft.NewRPC(request)
+	s.rpcCh <- rpc
+	res := <-rpc.Response()
+	if res.Error != nil {
+		return res.Error
+	}
+	*response = *(res.Response).(*raft.InstallSnapshotResponse)
+	return nil
+}
+
 func (s *RPCService) ApplyLog(request *raft.ApplyLogRequest, response *raft.ApplyLogResponse) error {
 	rpc := raft.NewRPC(request)
 	s.rpcCh <- rpc
@@ -76,58 +87,6 @@ func NewTransport(listener net.Listener) *Transport {
 		shutdownCh: make(chan struct{}, 1),
 	}
 	return t
-}
-
-func (t *Transport) Endpoint() raft.ServerEndpoint {
-	return raft.ServerEndpoint(t.listener.Addr().String())
-}
-
-func (t *Transport) Serve() {
-	if !atomic.CompareAndSwapUint32(&t.serveFlag, 0, 1) {
-		panic("Serve() should be only called once")
-	}
-	log.Println("transport started", "addr", t.listener.Addr())
-	rpcServer := rpc.NewServer()
-	raft.Must1(rpcServer.Register(t.service))
-	for {
-		select {
-		case <-t.shutdownCh:
-			return
-		default:
-		}
-		conn := raft.Must2(t.listener.Accept()).(net.Conn)
-		rpcCodec := codec.GoRpc.ServerCodec(conn, &codec.MsgpackHandle{})
-		rpcServer.ServeCodec(rpcCodec)
-	}
-}
-
-func (t *Transport) Connect(peer raft.Peer) error {
-	t.clientsMu.RLock()
-	if _, ok := t.clients[peer.ID]; ok {
-		return nil
-	}
-	t.clientsMu.RUnlock()
-	t.clientsMu.Lock()
-	defer t.clientsMu.Unlock()
-	return t.connectLocked(peer)
-}
-
-func (t *Transport) Disconnect(peer raft.Peer) {
-	t.clientsMu.Lock()
-	defer t.clientsMu.Unlock()
-	if client, ok := t.clients[peer.ID]; ok {
-		delete(t.clients, peer.ID)
-		client.conn.Close()
-	}
-}
-
-func (t *Transport) DisconnectAll() {
-	t.clientsMu.Lock()
-	defer t.clientsMu.Unlock()
-	for _, client := range t.clients {
-		client.conn.Close()
-	}
-	t.clients = map[raft.ServerID]*rpcClient{}
 }
 
 func (t *Transport) connectLocked(peer raft.Peer) error {
@@ -204,6 +163,9 @@ tryCall:
 	return nil
 }
 
+func (t *Transport) Endpoint() raft.ServerEndpoint {
+	return raft.ServerEndpoint(t.listener.Addr().String())
+}
 func (t *Transport) AppendEntries(
 	ctx context.Context, peer raft.Peer, request *raft.AppendEntriesRequest,
 ) (*raft.AppendEntriesResponse, error) {
@@ -228,6 +190,18 @@ func (t *Transport) RequestVote(
 	return response, nil
 }
 
+func (t *Transport) InstallSnapshot(
+	ctx context.Context, peer raft.Peer, request *raft.InstallSnapshotRequest,
+) (*raft.InstallSnapshotResponse, error) {
+	response := &raft.InstallSnapshotResponse{}
+	if err := t.tryClient(peer, func(c *rpcClient) error {
+		return c.client.Call("RPCService.InstallSnapshot", request, response)
+	}); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (t *Transport) ApplyLog(
 	ctx context.Context, peer raft.Peer, request *raft.ApplyLogRequest,
 ) (*raft.ApplyLogResponse, error) {
@@ -240,12 +214,60 @@ func (t *Transport) ApplyLog(
 	return response, nil
 }
 
+func (t *Transport) RPC() <-chan *raft.RPC {
+	return t.service.rpcCh
+}
+
+func (t *Transport) Serve() {
+	if !atomic.CompareAndSwapUint32(&t.serveFlag, 0, 1) {
+		panic("Serve() should be only called once")
+	}
+	log.Println("transport started", "addr", t.listener.Addr())
+	rpcServer := rpc.NewServer()
+	raft.Must1(rpcServer.Register(t.service))
+	for {
+		select {
+		case <-t.shutdownCh:
+			return
+		default:
+		}
+		conn := raft.Must2(t.listener.Accept()).(net.Conn)
+		rpcCodec := codec.GoRpc.ServerCodec(conn, &codec.MsgpackHandle{})
+		rpcServer.ServeCodec(rpcCodec)
+	}
+}
+
+func (t *Transport) Connect(peer raft.Peer) error {
+	t.clientsMu.RLock()
+	if _, ok := t.clients[peer.ID]; ok {
+		return nil
+	}
+	t.clientsMu.RUnlock()
+	t.clientsMu.Lock()
+	defer t.clientsMu.Unlock()
+	return t.connectLocked(peer)
+}
+
+func (t *Transport) Disconnect(peer raft.Peer) {
+	t.clientsMu.Lock()
+	defer t.clientsMu.Unlock()
+	if client, ok := t.clients[peer.ID]; ok {
+		delete(t.clients, peer.ID)
+		client.conn.Close()
+	}
+}
+
+func (t *Transport) DisconnectAll() {
+	t.clientsMu.Lock()
+	defer t.clientsMu.Unlock()
+	for _, client := range t.clients {
+		client.conn.Close()
+	}
+	t.clients = map[raft.ServerID]*rpcClient{}
+}
+
 func (t *Transport) Close() error {
 	t.DisconnectAll()
 	t.shutdownCh <- struct{}{}
 	return nil
-}
-
-func (t *Transport) RPC() <-chan *raft.RPC {
-	return t.service.rpcCh
 }
