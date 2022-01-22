@@ -114,9 +114,9 @@ func (s *snapshotScheduler) schedule(ctl *asyncCtl) {
 	for {
 		select {
 		case <-tickerCh:
-			ticker.Reset(s.interval)
 			s.server.snapshotCh <- nil
 		case <-s.appliesCh:
+			ticker.Reset(s.interval)
 			s.server.snapshotCh <- nil
 		case <-ctl.Cancelled():
 			return
