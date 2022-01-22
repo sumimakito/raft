@@ -27,7 +27,7 @@ type voteSummary struct {
 	candidate ServerID
 }
 
-// nilVoteSummary is equivalent to the 'unvoted' state due to its zero term
+// nilVoteSummary is equivalent to the "unvoted" state due to its zero term
 var nilVoteSummary = voteSummary{term: 0, candidate: ""}
 
 type serverState struct {
