@@ -23,6 +23,10 @@ type stateMachineAdapter struct {
 
 	lastIndex uint64
 	lastTerm  uint64
+
+	lastSnapshotIndex uint64
+	lastSnapshotTerm  uint64
+	lastSnapshotID    string
 }
 
 func newStateMachineAdapter(server *Server, stateMachine StateMachine) *stateMachineAdapter {
@@ -34,8 +38,7 @@ func newStateMachineAdapter(server *Server, stateMachine StateMachine) *stateMac
 // Unsafe for concurrent use.
 func (a *stateMachineAdapter) Apply(index, term uint64, command Command) {
 	a.stateMachine.Apply(command)
-	a.lastIndex = index
-	a.lastTerm = term
+	a.lastIndex, a.lastTerm = index, term
 }
 
 // Snapshot takes a snapshot of the underlying StateMachine and returns the id of
@@ -44,7 +47,12 @@ func (a *stateMachineAdapter) Apply(index, term uint64, command Command) {
 func (a *stateMachineAdapter) Snapshot() (spanshotID string, err error) {
 	c := a.server.confStore.Latest()
 	snapshot := a.stateMachine.Snapshot()
-	sink, err := a.server.snapshot.Create(a.lastIndex, a.lastTerm, c)
+	index, term := a.lastIndex, a.lastTerm
+	if index == a.lastSnapshotIndex && term == a.lastSnapshotTerm {
+		a.server.logger.Debugw("snapshot skipped", logFields(a.server)...)
+		return a.lastSnapshotID, nil
+	}
+	sink, err := a.server.snapshot.Create(index, term, c)
 	if err != nil {
 		return "", err
 	}
@@ -52,8 +60,8 @@ func (a *stateMachineAdapter) Snapshot() (spanshotID string, err error) {
 	a.server.logger.Infow("ready to take a snapshot",
 		logFields(a.server,
 			zap.String("snapshot_id", snapshotID),
-			zap.Uint64("snapshot_index", a.lastIndex),
-			zap.Uint64("snapshot_term", a.lastTerm))...)
+			zap.Uint64("snapshot_index", index),
+			zap.Uint64("snapshot_term", term))...)
 	if err := snapshot.Write(sink); err != nil {
 		if cancelError := sink.Cancel(); cancelError != nil {
 			return "", errors.Wrap(cancelError, err.Error())
@@ -63,10 +71,11 @@ func (a *stateMachineAdapter) Snapshot() (spanshotID string, err error) {
 	if err := sink.Close(); err != nil {
 		return "", err
 	}
+	a.lastSnapshotIndex, a.lastSnapshotTerm, a.lastSnapshotID = index, term, snapshotID
 	a.server.logger.Infow("snapshot has been taken",
 		logFields(a.server,
 			zap.String("snapshot_id", snapshotID),
-			zap.Uint64("snapshot_index", a.lastIndex),
-			zap.Uint64("snapshot_term", a.lastTerm))...)
+			zap.Uint64("snapshot_index", index),
+			zap.Uint64("snapshot_term", term))...)
 	return snapshotID, nil
 }
