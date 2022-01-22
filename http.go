@@ -75,6 +75,11 @@ func (rw *HandyRespWriter) Encoded(v interface{}, e HandyEncoding, statusCode in
 	}
 }
 
+func (rw *HandyRespWriter) Error(err error) {
+	rw.WriteHeader(http.StatusInternalServerError)
+	rw.logger.Warn("internal error while processing the request", zap.Error(err))
+}
+
 func (rw *HandyRespWriter) JSON(v interface{}) {
 	body, err := json.Marshal(v)
 	if err != nil {
