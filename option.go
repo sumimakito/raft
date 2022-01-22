@@ -15,6 +15,7 @@ type serverOptions struct {
 	followerTimeout           time.Duration
 	maxTimerRandomOffsetRatio float64
 	metricsExporter           MetricsExporter
+	snapshotPolicy            SnapshotPolicy
 }
 
 type ServerOption func(options *serverOptions)
@@ -32,6 +33,7 @@ func defaultServerOptions() *serverOptions {
 		followerTimeout:           1000 * time.Millisecond,
 		maxTimerRandomOffsetRatio: 0.3,
 		metricsExporter:           nil,
+		snapshotPolicy:            SnapshotPolicy{Applies: 10, Interval: 1 * time.Second},
 	}
 }
 
@@ -70,5 +72,11 @@ func APIExtensionOption(extension APIExtension) ServerOption {
 func StableStorePathOption(path string) ServerOption {
 	return func(options *serverOptions) {
 		options.stableStorePath = path
+	}
+}
+
+func SnapshotPolicyOption(policy SnapshotPolicy) ServerOption {
+	return func(options *serverOptions) {
+		options.snapshotPolicy = policy
 	}
 }
