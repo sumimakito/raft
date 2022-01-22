@@ -45,6 +45,8 @@ type SnapshotStore interface {
 	Open(snapshotID string) (*SnapshotMeta, io.ReadCloser, error)
 }
 
+// snapshotScheduler is responsible for triggering snapshot creations under
+// the SnapshotPolicy.
 type snapshotScheduler struct {
 	server *Server
 
@@ -59,8 +61,7 @@ type snapshotScheduler struct {
 	applies   int
 	appliesCh chan struct{}
 
-	interval       time.Duration
-	intervalTicker *time.Ticker
+	interval time.Duration
 }
 
 func newSnapshotScheduler(server *Server) *snapshotScheduler {
@@ -70,32 +71,6 @@ func newSnapshotScheduler(server *Server) *snapshotScheduler {
 		applies:   server.opts.snapshotPolicy.Applies,
 		appliesCh: make(chan struct{}, 1),
 		interval:  server.opts.snapshotPolicy.Interval,
-	}
-}
-
-func (s *snapshotScheduler) latestSnapshotID() (string, error) {
-	metaList, err := s.server.snapshot.List()
-	if err != nil {
-		return "", err
-	}
-	if len(metaList) == 0 {
-		return "", nil
-	}
-	return metaList[0].ID, nil
-}
-
-func (s *snapshotScheduler) RecordStateMachineApply() {
-	if s.applies <= 0 {
-		return
-	}
-	s.applyCounterMu.Lock()
-	defer s.applyCounterMu.Unlock()
-	s.applyCounter += 1
-	if s.applyCounter >= s.applies {
-		select {
-		case s.appliesCh <- struct{}{}:
-		case <-time.NewTimer(s.interval).C:
-		}
 	}
 }
 
@@ -121,6 +96,26 @@ func (s *snapshotScheduler) schedule(ctl *asyncCtl) {
 		case <-ctl.Cancelled():
 			return
 		}
+	}
+}
+
+// RecordApply is called when a command has been applied to the StateMachine.
+func (s *snapshotScheduler) RecordApply() {
+	if s.applies <= 0 {
+		// "Applies" in the SnapshotPolicy is disabled.
+		return
+	}
+	s.applyCounterMu.Lock()
+	s.applyCounter += 1
+	if s.applyCounter >= s.applies {
+		s.applyCounter = 0
+		s.applyCounterMu.Unlock()
+		select {
+		case s.appliesCh <- struct{}{}:
+		case <-time.NewTimer(s.interval).C:
+		}
+	} else {
+		s.applyCounterMu.Unlock()
 	}
 }
 
