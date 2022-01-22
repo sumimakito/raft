@@ -1,7 +1,9 @@
 package raft
 
 import (
+	"bufio"
 	"encoding/binary"
+	"io"
 	"log"
 	"path"
 	"path/filepath"
@@ -65,6 +67,26 @@ func (t *TickTrigger) Tick() {
 		t.fn()
 		atomic.AddInt64(&t.t, -t.ticks)
 	}
+}
+
+type BufferedReadCloser struct {
+	reader *bufio.Reader
+	closer io.Closer
+}
+
+func NewBufferedReadCloser(r io.ReadCloser) *BufferedReadCloser {
+	return &BufferedReadCloser{
+		reader: bufio.NewReader(r),
+		closer: r,
+	}
+}
+
+func (r *BufferedReadCloser) Read(p []byte) (n int, err error) {
+	return r.reader.Read(p)
+}
+
+func (r *BufferedReadCloser) Close() error {
+	return r.closer.Close()
 }
 
 // CappedSlice is a ring buffer like slice which holds a maximum of `cap` items.
