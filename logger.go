@@ -18,9 +18,7 @@ func logFields(server *Server, keysAndValues ...interface{}) []interface{} {
 	}, keysAndValues...)
 }
 
-func wrappedServerLogger() *zap.SugaredLogger {
-	logLevel := zapcore.InfoLevel
-
+func wrappedServerLogger(logLevel zapcore.Level) *zap.SugaredLogger {
 	highPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
 		return lvl >= zapcore.ErrorLevel && lvl >= logLevel
 	})

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"go.uber.org/zap/zapcore"
 )
 
 type serverOptions struct {
@@ -13,6 +15,7 @@ type serverOptions struct {
 	stableStorePath           string
 	electionTimeout           time.Duration
 	followerTimeout           time.Duration
+	logLevel                  zapcore.Level
 	maxTimerRandomOffsetRatio float64
 	metricsExporter           MetricsExporter
 	snapshotPolicy            SnapshotPolicy
@@ -31,6 +34,7 @@ func defaultServerOptions() *serverOptions {
 		stableStorePath:           filepath.Join(wd, "stable.db"),
 		electionTimeout:           1000 * time.Millisecond,
 		followerTimeout:           1000 * time.Millisecond,
+		logLevel:                  zapcore.InfoLevel,
 		maxTimerRandomOffsetRatio: 0.3,
 		metricsExporter:           nil,
 		snapshotPolicy:            SnapshotPolicy{Applies: 10, Interval: 1 * time.Second},
@@ -66,6 +70,12 @@ func MetricsKeeperOption(exporter MetricsExporter) ServerOption {
 func APIExtensionOption(extension APIExtension) ServerOption {
 	return func(options *serverOptions) {
 		options.apiExtensions = append(options.apiExtensions, extension)
+	}
+}
+
+func LogLevelOption(level zapcore.Level) ServerOption {
+	return func(options *serverOptions) {
+		options.logLevel = level
 	}
 }
 

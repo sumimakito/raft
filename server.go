@@ -112,7 +112,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
 		opts:     applyServerOpts(opts...),
 	}
 	// Set up the logger
-	server.logger = wrappedServerLogger()
+	server.logger = wrappedServerLogger(server.opts.logLevel)
 	go func() { <-terminalSignalCh(); _ = server.logger.Sync() }()
 
 	server.stable = newStableStore(server)

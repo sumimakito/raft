@@ -181,7 +181,7 @@ func (s *SnapshotStore) List() ([]*raft.SnapshotMeta, error) {
 }
 
 func (s *SnapshotStore) Open(id string) (*raft.SnapshotMeta, io.ReadCloser, error) {
-	file, err := os.Open(filepath.Join(s.storeDir, id, "meta"))
+	file, err := os.Open(filepath.Join(s.storeDir, id, "metadata"))
 	if err != nil {
 		return nil, nil, err
 	}

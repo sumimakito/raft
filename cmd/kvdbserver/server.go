@@ -12,21 +12,35 @@ import (
 	"github.com/sumimakito/raft"
 	"github.com/sumimakito/raft/msgpackrpc"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
+
+var logLevels = map[string]zapcore.Level{
+	"debug":  zap.DebugLevel,
+	"info":   zap.InfoLevel,
+	"warn":   zap.WarnLevel,
+	"error":  zap.ErrorLevel,
+	"dpanic": zap.DPanicLevel,
+	"panic":  zap.PanicLevel,
+	"fatal":  zap.FatalLevel,
+}
 
 func main() {
 	logger, err := zap.NewDevelopment()
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	workDir, err := os.Getwd()
 	if err != nil {
-		logger.Fatal(err.Error(), zap.Error(err))
+		log.Panic(err)
 	}
 
+	var logLevelName string
 	var snapshotDir string
 	var stableDir string
+	flag.StringVar(&logLevelName, "logLevel", "info",
+		"Specifies the logging level (available: debug, info, warn, error, dpanic, panic, fatal).")
 	flag.StringVar(&snapshotDir, "snapshotDir", filepath.Join(workDir, "snapshot"),
 		"Specifies the directory that snapshot files are kept in.")
 	flag.StringVar(&stableDir, "stableDir", filepath.Join(workDir, "stable"),
@@ -42,6 +56,11 @@ func main() {
 		os.Exit(0)
 	}
 
+	logLevel, ok := logLevels[logLevelName]
+	if !ok {
+		log.Panicf("unknown log level: %s\n", logLevelName)
+	}
+
 	serverID := flag.Arg(0)
 	rpcServerAddr := flag.Arg(1)
 	apiServerAddr := flag.Arg(2)
@@ -50,14 +69,14 @@ func main() {
 	stableDir = raft.PathJoin(workDir, stableDir)
 
 	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
-		logger.Fatal(err.Error(), zap.Error(err))
+		log.Panic(err)
 	}
 	if err := os.MkdirAll(stableDir, 0755); err != nil {
-		logger.Fatal(err.Error(), zap.Error(err))
+		log.Panic(err)
 	}
 
-	logger.Info(fmt.Sprintf("using %s as directory for snapshot files", snapshotDir))
-	logger.Info(fmt.Sprintf("using %s as directory for stable storage files", stableDir))
+	log.Printf("using %s as directory for snapshot files\n", snapshotDir)
+	log.Printf("using %s as directory for stable storage files\n", stableDir)
 
 	listener := raft.Must2(net.Listen("tcp", rpcServerAddr)).(net.Listener)
 	kvdbAPIExt := NewAPIExtension(logger)
@@ -76,10 +95,11 @@ func main() {
 		},
 		raft.APIExtensionOption(kvdbAPIExt),
 		raft.APIServerListenAddressOption(apiServerAddr),
+		raft.LogLevelOption(logLevel),
 		raft.StableStorePathOption(filepath.Join(stableDir, fmt.Sprintf("stable_%s.db", serverID))),
 	)
 
 	if err := server.Serve(); err != nil {
-		logger.Fatal(err.Error(), zap.Error(err))
+		log.Panic(err)
 	}
 }
