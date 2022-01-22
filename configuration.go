@@ -6,22 +6,22 @@ import (
 	"github.com/ugorji/go/codec"
 )
 
-type raftConfiguration struct {
+type Config struct {
 	peerMap SingleFlight
 	Peers   []Peer `json:"peers" codec:"peers"`
 }
 
-func newRaftConfiguration(peers []Peer) *raftConfiguration {
-	c := &raftConfiguration{}
+func newConfig(peers []Peer) *Config {
+	c := &Config{}
 	c.Peers = append(c.Peers, peers...)
 	return c
 }
 
-func (c *raftConfiguration) Copy() *raftConfiguration {
-	return newRaftConfiguration(c.Peers)
+func (c *Config) Copy() *Config {
+	return newConfig(c.Peers)
 }
 
-func (c *raftConfiguration) Contains(serverID ServerID) bool {
+func (c *Config) Contains(serverID ServerID) bool {
 	peerMap := c.peerMap.Do(func() interface{} {
 		m := map[ServerID]Peer{}
 		for _, p := range c.Peers {
@@ -33,7 +33,7 @@ func (c *raftConfiguration) Contains(serverID ServerID) bool {
 	return ok
 }
 
-func (c *raftConfiguration) Quorum() int {
+func (c *Config) Quorum() int {
 	return len(c.Peers)/2 + 1
 }
 
@@ -43,8 +43,8 @@ type Configuration struct {
 	peerMapSF SingleFlight
 	peersSF   SingleFlight
 
-	Current *raftConfiguration `json:"current" codec:"current"` // cOld
-	Next    *raftConfiguration `json:"next" codec:"next"`       // cNew
+	Current *Config `json:"current" codec:"current"` // cOld
+	Next    *Config `json:"next" codec:"next"`       // cNew
 }
 
 func (c *Configuration) peerMap() map[ServerID]Peer {
@@ -84,15 +84,15 @@ func (c *Configuration) peers() []Peer {
 	}).([]Peer)
 }
 
-func (c *Configuration) Copy() (out Configuration) {
-	out.Current = c.Current.Copy()
+func (c *Configuration) Copy() *Configuration {
+	out := &Configuration{Current: c.Current.Copy()}
 	if out.Next != nil {
 		out.Next = c.Next.Copy()
 	}
-	return
+	return out
 }
 
-func (c *Configuration) CopyInitiateTransition(next *raftConfiguration) *Configuration {
+func (c *Configuration) CopyInitiateTransition(next *Config) *Configuration {
 	return &Configuration{Current: c.Current.Copy(), Next: next.Copy()}
 }
 
@@ -100,13 +100,13 @@ func (c *Configuration) CopyCommitTransition() *Configuration {
 	return &Configuration{Current: c.Next.Copy()}
 }
 
-func (c *Configuration) Decode(in []byte) {
-	codec.NewDecoderBytes(in, &codec.MsgpackHandle{}).MustDecode(c)
-}
-
 func (c *Configuration) Encode() (out []byte) {
 	codec.NewEncoderBytes(&out, &codec.MsgpackHandle{}).MustEncode(*c)
 	return
+}
+
+func (c *Configuration) Decode(in []byte) {
+	codec.NewDecoderBytes(in, &codec.MsgpackHandle{}).MustDecode(c)
 }
 
 func (c *Configuration) Joint() bool {
@@ -135,17 +135,15 @@ func (c *Configuration) Peers() []Peer {
 	return c.peers()
 }
 
-var nilConfiguration = &Configuration{Current: newRaftConfiguration(nil)}
+var nilConfiguration = &Configuration{Current: newConfig(nil)}
 
 type configurationStore struct {
-	server    *Server
-	committed atomic.Value // *Configuration
-	latest    atomic.Value // *Configuration
+	server *Server
+	latest atomic.Value // *Configuration
 }
 
 func newConfigurationStore(server *Server) (c configurationStore) {
 	c.server = server
-	c.committed.Store(nilConfiguration)
 	c.latest.Store(nilConfiguration)
 
 	// Find the latest configuration
@@ -186,7 +184,7 @@ func (s *configurationStore) ArbitraryAppend(c *Configuration) {
 // Should not be called when the server is already in a joint consensus.
 // When the leader prepares to change the configuration, this should be the only
 // function to call.
-func (s *configurationStore) InitiateTransition(next *raftConfiguration) error {
+func (s *configurationStore) InitiateTransition(next *Config) error {
 	latest := s.latest.Load().(*Configuration)
 	if latest.Joint() {
 		return ErrInJointConsensus
