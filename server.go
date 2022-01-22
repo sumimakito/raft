@@ -139,7 +139,7 @@ func (s *Server) alterConfiguration(c *Configuration) {
 
 func (s *Server) alterLeader(leader Peer) {
 	s.logger.Infow("alter leader", logFields(s, "new_leader", leader)...)
-	s.SetLeader(leader)
+	s.setLeader(leader)
 }
 
 func (s *Server) alterRole(role ServerRole) {
@@ -158,7 +158,7 @@ func (s *Server) stepdownFollower(leader Peer) {
 		s.logger.Panicw("stepdownFollower() requires the server to have a role which is higher than follower",
 			logFields(s)...)
 	}
-	s.SetLeader(leader)
+	s.setLeader(leader)
 	s.setRole(Follower)
 }
 
@@ -578,7 +578,7 @@ func (s *Server) Leader() Peer {
 	return nilPeer
 }
 
-func (s *Server) SetLeader(leader Peer) {
+func (s *Server) setLeader(leader Peer) {
 	s.clusterLeader.Store(leader)
 }
 
