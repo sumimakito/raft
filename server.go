@@ -58,6 +58,8 @@ type serverChannels struct {
 	// commitCh receives updates on the commit index.
 	commitCh chan uint64
 
+	snapshotCh chan FutureTask
+
 	shutdownCh    chan error
 	terminalSigCh chan error
 }
@@ -76,10 +78,11 @@ type Server struct {
 
 	serverChannels
 
-	confStore    configurationStore
-	stateMachine *stateMachineAdapter
-	rpcHandler   *rpcHandler
-	repl         *replScheduler
+	confStore     configurationStore
+	stateMachine  *stateMachineAdapter
+	rpcHandler    *rpcHandler
+	repl          *replScheduler
+	snapshotSched *snapshotScheduler
 
 	apiServer *apiServer
 
@@ -99,6 +102,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
 			rpcCh:         make(chan *RPC, 16),
 			applyLogCh:    make(chan FutureTask, 16),
 			commitCh:      make(chan uint64, 16),
+			snapshotCh:    make(chan FutureTask, 16),
 			shutdownCh:    make(chan error, 1),
 			terminalSigCh: make(chan error, 1),
 		},
@@ -117,6 +121,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
 	server.apiServer = newAPIServer(server, server.opts.apiExtensions...)
 	server.confStore = newConfigurationStore(server)
 	server.repl = newReplScheduler(server)
+	server.snapshotSched = newSnapshotScheduler(server)
 	server.rpcHandler = newRPCHandler(server)
 	server.stateMachine = newStateMachineAdapter(server, coreOpts.StateMachine)
 
@@ -276,6 +281,8 @@ func (s *Server) runLoopLeader() {
 			s.updateCommitIndex(commitIndex)
 		case rpc := <-s.trans.RPC():
 			go s.handleRPC(rpc)
+		case <-s.snapshotCh:
+			s.stateMachine.Snapshot()
 		case err := <-s.shutdownCh:
 			s.runShutdown(err)
 			return
@@ -411,10 +418,6 @@ func (s *Server) serveAPIServer() {
 			s.logger.Warn(err)
 		}
 	}
-}
-
-func (s *Server) takeSnapshot() error {
-	return s.stateMachine.Snapshot()
 }
 
 func (s *Server) startElection() (<-chan *RequestVoteResponse, context.CancelFunc) {
@@ -628,6 +631,10 @@ func (s *Server) Serve() error {
 	}
 	go s.trans.Serve()
 	go s.serveAPIServer()
+
+	s.snapshotSched.Start()
+	defer s.snapshotSched.Stop()
+
 	go s.runMainLoop()
 
 	return <-s.terminalSigCh
