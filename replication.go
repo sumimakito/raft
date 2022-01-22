@@ -1,16 +1,13 @@
 package raft
 
 import (
-	"context"
 	"sort"
 	"sync"
 )
 
 type replCtl struct {
-	replID ObjectID
-	ctx    context.Context
-	cancel context.CancelFunc
-	c      chan struct{}
+	*asyncCtl
+	replID string
 }
 
 type replState struct {
@@ -26,8 +23,7 @@ type replState struct {
 }
 
 func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse) {
-	defer close(ctl.c)
-	defer ctl.cancel()
+	defer ctl.Release()
 
 	var requestID ObjectID
 	var request *AppendEntriesRequest
@@ -41,7 +37,7 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 	if s.peer.ID == s.sched.server.id {
 	SELF_CHECK_INDEX:
 		select {
-		case <-ctl.ctx.Done():
+		case <-ctl.Cancelled():
 			return
 		default:
 		}
@@ -57,7 +53,7 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 		}
 		if lastLogIndex <= matchIndex.(uint64) {
 			select {
-			case <-ctl.ctx.Done():
+			case <-ctl.Cancelled():
 				return
 			case <-s.sched.server.randomTimer(s.sched.server.opts.followerTimeout / 10).C:
 				goto SELF_CHECK_INDEX
@@ -65,7 +61,7 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 		}
 
 		select {
-		case <-ctl.ctx.Done():
+		case <-ctl.Cancelled():
 			return
 		default:
 		}
@@ -77,7 +73,7 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 			logFields(s.sched.server, "replication_id", ctl.replID, "peer", s.peer)...)
 
 		select {
-		case <-ctl.ctx.Done():
+		case <-ctl.Cancelled():
 			return
 		case <-s.sched.server.randomTimer(s.sched.server.opts.followerTimeout / 10).C:
 			goto SELF_CHECK_INDEX
@@ -86,7 +82,7 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 
 CHECK_INDEX:
 	select {
-	case <-ctl.ctx.Done():
+	case <-ctl.Cancelled():
 		return
 	default:
 	}
@@ -104,7 +100,7 @@ CHECK_INDEX:
 			"request", request)...)
 
 	select {
-	case <-ctl.ctx.Done():
+	case <-ctl.Cancelled():
 		return
 	default:
 	}
@@ -116,7 +112,7 @@ CHECK_INDEX:
 			"peer", s.peer,
 			"request_id", requestID,
 			"request", request)...)
-	if response, err := s.sched.server.trans.AppendEntries(ctl.ctx, s.peer, request); err != nil {
+	if response, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, request); err != nil {
 		s.sched.server.logger.Infow("error sending heartbeat request",
 			logFields(s.sched.server,
 				"replication_id", ctl.replID,
@@ -129,7 +125,7 @@ CHECK_INDEX:
 	}
 
 	select {
-	case <-ctl.ctx.Done():
+	case <-ctl.Cancelled():
 		return
 	case <-s.sched.server.randomTimer(s.sched.server.opts.followerTimeout / 10).C:
 		goto CHECK_INDEX
@@ -137,7 +133,7 @@ CHECK_INDEX:
 
 REPLICATE:
 	select {
-	case <-ctl.ctx.Done():
+	case <-ctl.Cancelled():
 		return
 	default:
 	}
@@ -149,7 +145,7 @@ REPLICATE:
 			"peer", s.peer,
 			"request_id", requestID,
 			"request", request)...)
-	if response, err := s.sched.server.trans.AppendEntries(ctl.ctx, s.peer, request); err != nil {
+	if response, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, request); err != nil {
 		s.sched.server.logger.Infow("error sending replication request",
 			logFields(s.sched.server,
 				"replication_id", ctl.replID,
@@ -181,14 +177,14 @@ REPLICATE:
 	}
 
 	select {
-	case <-ctl.ctx.Done():
+	case <-ctl.Cancelled():
 		return
 	case <-s.sched.server.randomTimer(s.sched.server.opts.followerTimeout / 10).C:
 		goto CHECK_INDEX
 	}
 }
 
-func (s *replState) Replicate(replID ObjectID, resCh chan<- *AppendEntriesResponse) {
+func (s *replState) Replicate(replID string, resCh chan<- *AppendEntriesResponse) {
 	s.ctlMu.Lock()
 	defer s.ctlMu.Unlock()
 
@@ -196,13 +192,12 @@ func (s *replState) Replicate(replID ObjectID, resCh chan<- *AppendEntriesRespon
 		s.sched.server.logger.Panic("attempt to reuse a stopped replState")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	newCtl := &replCtl{replID: replID, ctx: ctx, cancel: cancel, c: make(chan struct{}, 1)}
+	newCtl := &replCtl{asyncCtl: newAsyncCtl(), replID: replID}
 	oldCtl := s.ctl
 	s.ctl = newCtl
 	if oldCtl != nil {
-		oldCtl.cancel()
-		<-oldCtl.c
+		oldCtl.Cancel()
+		oldCtl.WaitRelease()
 	}
 	go s.replicate(newCtl, resCh)
 }
@@ -216,8 +211,8 @@ func (s *replState) Stop() {
 	}
 
 	if s.ctl != nil {
-		s.ctl.cancel()
-		<-s.ctl.c
+		s.ctl.Cancel()
+		s.ctl.WaitRelease()
 	}
 }
 
@@ -356,7 +351,7 @@ func (r *replScheduler) nextCommitIndexLocked(c *Configuration) uint64 {
 func (r *replScheduler) Start() <-chan *AppendEntriesResponse {
 	c := r.server.confStore.Latest()
 
-	replID := NewObjectID()
+	replID := NewObjectID().Hex()
 	r.server.logger.Infow("replication/heartbeat scheduled",
 		logFields(r.server, "replication_id", replID)...)
 
