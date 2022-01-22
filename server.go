@@ -33,6 +33,14 @@ type ServerStates struct {
 	CommitIndex       uint64         `json:"commit_index"`
 }
 
+type ServerCoreOptions struct {
+	ID           ServerID
+	Log          LogStore
+	StateMachine StateMachine
+	Snapshot     SnapshotStore
+	Transport    Transport
+}
+
 type serverChannels struct {
 	noCopy
 	bootstrapCh chan FutureTask
@@ -55,8 +63,10 @@ type serverChannels struct {
 }
 
 type Server struct {
-	id   ServerID
-	opts *serverOptions
+	id        ServerID
+	opts      *serverOptions
+	serveFlag uint32
+	logger    *zap.SugaredLogger
 
 	clusterLeader atomic.Value // Peer
 
@@ -66,23 +76,21 @@ type Server struct {
 
 	serverChannels
 
-	rpcHandler *rpcHandler
-	repl       *replScheduler
+	confStore    configurationStore
+	stateMachine *stateMachineAdapter
+	rpcHandler   *rpcHandler
+	repl         *replScheduler
 
 	apiServer *apiServer
 
-	confStore    configurationStore
-	logStore     LogStore
-	stateMachine StateMachine
-	trans        Transport
-
-	logger    *zap.SugaredLogger
-	serveFlag uint32
+	logStore LogStore
+	snapshot SnapshotStore
+	trans    Transport
 }
 
-func NewServer(id ServerID, logStore LogStore, stateMachine StateMachine, transport Transport, opts ...ServerOption) *Server {
+func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
 	server := &Server{
-		id:          id,
+		id:          coreOpts.ID,
 		serverState: serverState{stateRole: Follower},
 		commitState: commitState{},
 		serverChannels: serverChannels{
@@ -94,19 +102,23 @@ func NewServer(id ServerID, logStore LogStore, stateMachine StateMachine, transp
 			shutdownCh:    make(chan error, 1),
 			terminalSigCh: make(chan error, 1),
 		},
-		logStore:     logStore,
-		stateMachine: stateMachine,
-		trans:        transport,
-		opts:         applyServerOpts(opts...),
+		logStore: coreOpts.Log,
+		trans:    coreOpts.Transport,
+		snapshot: coreOpts.Snapshot,
+		opts:     applyServerOpts(opts...),
 	}
+	// Set up the logger
 	server.logger = wrappedServerLogger()
 	go func() { <-terminalSignalCh(); _ = server.logger.Sync() }()
+
 	server.stable = newStableStore(server)
-	server.rpcHandler = newRPCHandler(server)
-	server.repl = newReplScheduler(server)
-	server.apiServer = newAPIServer(server, server.opts.apiExtensions...)
 	server.restoreStates()
+
+	server.apiServer = newAPIServer(server, server.opts.apiExtensions...)
 	server.confStore = newConfigurationStore(server)
+	server.repl = newReplScheduler(server)
+	server.rpcHandler = newRPCHandler(server)
+	server.stateMachine = newStateMachineAdapter(server, coreOpts.StateMachine)
 
 	return server
 }
@@ -401,6 +413,10 @@ func (s *Server) serveAPIServer() {
 	}
 }
 
+func (s *Server) takeSnapshot() error {
+	return s.stateMachine.Snapshot()
+}
+
 func (s *Server) startElection() (<-chan *RequestVoteResponse, context.CancelFunc) {
 	s.logger.Infow("ready to start the election", logFields(s)...)
 	s.alterTerm(s.currentTerm() + 1)
@@ -471,7 +487,7 @@ func (s *Server) updateCommitIndex(commitIndex uint64) {
 		}
 		switch log.Type {
 		case LogCommand:
-			s.stateMachine.Apply(log.Data)
+			s.stateMachine.Apply(log.Index, log.Term, log.Data)
 		case LogConfiguration:
 			c := &Configuration{logIndex: log.Index}
 			c.Decode(log.Data)
@@ -534,7 +550,7 @@ func (s *Server) Bootstrap(c *Configuration) Future {
 }
 
 func (s *Server) StateMachine() StateMachine {
-	return s.stateMachine
+	return s.stateMachine.stateMachine
 }
 
 func (s *Server) ID() ServerID {
@@ -599,7 +615,7 @@ func (s *Server) Serve() error {
 		// The latest configuration does not contain any peers.
 		// The server should be the first node in the cluster.
 		c := &Configuration{
-			Current: newRaftConfiguration([]Peer{
+			Current: newConfig([]Peer{
 				{ID: s.id, Endpoint: s.Endpoint()},
 			}),
 		}
@@ -615,6 +631,10 @@ func (s *Server) Serve() error {
 	go s.runMainLoop()
 
 	return <-s.terminalSigCh
+}
+
+func (s *Server) Snapshot() {
+
 }
 
 func (s *Server) States() ServerStates {

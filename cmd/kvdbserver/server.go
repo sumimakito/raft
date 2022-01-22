@@ -25,8 +25,12 @@ func main() {
 		logger.Fatal(err.Error(), zap.Error(err))
 	}
 
+	var snapshotDir string
 	var stableDir string
-	flag.StringVar(&stableDir, "stableDir", workDir, "Specifies the directory that stable storage files are kept in.")
+	flag.StringVar(&snapshotDir, "snapshotDir", filepath.Join(workDir, "snapshot"),
+		"Specifies the directory that snapshot files are kept in.")
+	flag.StringVar(&stableDir, "stableDir", filepath.Join(workDir, "stable"),
+		"Specifies the directory that stable storage files are kept in.")
 
 	flag.Parse()
 
@@ -42,16 +46,17 @@ func main() {
 	rpcServerAddr := flag.Arg(1)
 	apiServerAddr := flag.Arg(2)
 
+	snapshotDir = raft.PathJoin(workDir, snapshotDir)
 	stableDir = raft.PathJoin(workDir, stableDir)
 
-	stableDirFileInfo, err := os.Stat(stableDir)
-	if err != nil {
+	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
 		logger.Fatal(err.Error(), zap.Error(err))
 	}
-	if !stableDirFileInfo.IsDir() {
-		logger.Fatal("path specified by -stableDir is not a directory")
+	if err := os.MkdirAll(stableDir, 0755); err != nil {
+		logger.Fatal(err.Error(), zap.Error(err))
 	}
 
+	logger.Info(fmt.Sprintf("using %s as directory for snapshot files", snapshotDir))
 	logger.Info(fmt.Sprintf("using %s as directory for stable storage files", stableDir))
 
 	listener := raft.Must2(net.Listen("tcp", rpcServerAddr)).(net.Listener)
@@ -59,8 +64,16 @@ func main() {
 	logStore := NewLogStore(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
 	kvsm := NewKVSM()
 	transport := msgpackrpc.NewTransport(listener)
+	snapshot := NewSnapshotStore(snapshotDir)
 
-	server := raft.NewServer(raft.ServerID(serverID), logStore, kvsm, transport,
+	server := raft.NewServer(
+		raft.ServerCoreOptions{
+			ID:           raft.ServerID(serverID),
+			Log:          logStore,
+			StateMachine: kvsm,
+			Snapshot:     snapshot,
+			Transport:    transport,
+		},
 		raft.APIExtensionOption(kvdbAPIExt),
 		raft.APIServerListenAddressOption(apiServerAddr),
 		raft.StableStorePathOption(filepath.Join(stableDir, fmt.Sprintf("stable_%s.db", serverID))),

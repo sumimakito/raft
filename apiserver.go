@@ -167,8 +167,16 @@ func (s *apiServer) setupRouters() *mux.Router {
 			}
 			return nil, http.StatusNoContent, nil
 		})
-
 	}).Methods("POST")
+
+	s.routers.apiV1.HandleFunc("/snapshot", func(rw http.ResponseWriter, r *http.Request) {
+		h := NewHandyRespWriter(rw, s.server.logger.Desugar())
+		if err := s.server.takeSnapshot(); err != nil {
+			h.Error(err)
+			return
+		}
+		h.WriteHeader(http.StatusNoContent)
+	}).Methods("GET")
 
 	for _, extension := range s.extensions {
 		Must1(extension.Setup(s.server, s.routers.apiExt))
