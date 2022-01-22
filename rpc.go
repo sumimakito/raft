@@ -5,13 +5,13 @@ import (
 )
 
 type RPC struct {
-	requestID  ObjectID
+	requestID  string
 	Request    interface{}
 	responseCh chan *RPCResponse
 }
 
 func NewRPC(request interface{}) *RPC {
-	return &RPC{requestID: NewObjectID(), Request: request, responseCh: make(chan *RPCResponse, 1)}
+	return &RPC{requestID: NewObjectID().Hex(), Request: request, responseCh: make(chan *RPCResponse, 1)}
 }
 
 func (rpc *RPC) respond(response interface{}, err error) {
@@ -86,9 +86,9 @@ func newRPCHandler(server *Server) *rpcHandler {
 	return &rpcHandler{server: server}
 }
 
-func (h *rpcHandler) AppendEntries(ctx context.Context, reqID ObjectID, request *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+func (h *rpcHandler) AppendEntries(ctx context.Context, requestID string, request *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	h.server.logger.Debugw("incoming RPC: AppendEntries",
-		logFields(h.server, "request_id", reqID, "request", request)...)
+		logFields(h.server, "request_id", requestID, "request", request)...)
 
 	response := &AppendEntriesResponse{
 		ServerID: h.server.id,
@@ -97,7 +97,7 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, reqID ObjectID, request 
 	}
 
 	if request.Term < h.server.currentTerm() {
-		h.server.logger.Debugw("incoming term is stale", logFields(h.server, "request_id", reqID)...)
+		h.server.logger.Debugw("incoming term is stale", logFields(h.server, "request_id", requestID)...)
 		return response, nil
 	}
 
@@ -107,7 +107,7 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, reqID ObjectID, request 
 	}
 
 	if request.Term > h.server.currentTerm() {
-		h.server.logger.Debugw("local term is stale", logFields(h.server, "request_id", reqID)...)
+		h.server.logger.Debugw("local term is stale", logFields(h.server, "request_id", requestID)...)
 		if h.server.role() != Follower {
 			leaderPeer := h.server.confStore.Latest().Peer(request.LeaderID)
 			h.server.stepdownFollower(leaderPeer)
@@ -120,7 +120,7 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, reqID ObjectID, request 
 		requestPrevLog := h.server.logStore.Entry(request.PrevLogIndex)
 		if requestPrevLog == nil || request.PrevLogTerm != requestPrevLog.Term {
 			h.server.logger.Infow("incoming previous log does not exist or has a different term",
-				logFields(h.server, "request_id", reqID, "request", request)...)
+				logFields(h.server, "request_id", requestID, "request", request)...)
 			return response, nil
 		}
 	}
@@ -154,7 +154,7 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, reqID ObjectID, request 
 
 	if request.LeaderCommit > h.server.commitIndex() {
 		h.server.logger.Infow("local commit index is stale",
-			logFields(h.server, "request_id", reqID, "new_commit_index", request.LeaderCommit)...)
+			logFields(h.server, "request_id", requestID, "new_commit_index", request.LeaderCommit)...)
 		h.server.alterCommitIndex(request.LeaderCommit)
 	}
 
@@ -162,9 +162,9 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, reqID ObjectID, request 
 	return response, nil
 }
 
-func (h *rpcHandler) RequestVote(ctx context.Context, id ObjectID, request *RequestVoteRequest) (*RequestVoteResponse, error) {
+func (h *rpcHandler) RequestVote(ctx context.Context, requestID string, request *RequestVoteRequest) (*RequestVoteResponse, error) {
 	h.server.logger.Infow("incoming RPC: RequestVote",
-		logFields(h.server, "request_id", id, "request", request)...)
+		logFields(h.server, "request_id", requestID, "request", request)...)
 
 	response := &RequestVoteResponse{
 		ServerID:    h.server.id,
@@ -173,7 +173,7 @@ func (h *rpcHandler) RequestVote(ctx context.Context, id ObjectID, request *Requ
 	}
 
 	if request.Term < h.server.currentTerm() {
-		h.server.logger.Debugw("incoming term is stale", logFields(h.server, "request_id", id)...)
+		h.server.logger.Debugw("incoming term is stale", logFields(h.server, "request_id", requestID)...)
 		return response, nil
 	}
 
@@ -181,7 +181,7 @@ func (h *rpcHandler) RequestVote(ctx context.Context, id ObjectID, request *Requ
 	lastVoteSummary := h.server.lastVoteSummary()
 	if h.server.currentTerm() <= lastVoteSummary.term {
 		h.server.logger.Debugw("server has voted in this term",
-			logFields(h.server, "request_id", id, "candidate", lastVoteSummary.candidate)...)
+			logFields(h.server, "request_id", requestID, "candidate", lastVoteSummary.candidate)...)
 		// Check if the granted vote is for current candidate.
 		if lastVoteSummary.candidate == request.CandidateID {
 			response.VoteGranted = true
@@ -217,9 +217,9 @@ func (h *rpcHandler) RequestVote(ctx context.Context, id ObjectID, request *Requ
 	return response, nil
 }
 
-func (h *rpcHandler) ApplyLog(ctx context.Context, id ObjectID, request *ApplyLogRequest) (*ApplyLogResponse, error) {
+func (h *rpcHandler) ApplyLog(ctx context.Context, requestID string, request *ApplyLogRequest) (*ApplyLogResponse, error) {
 	h.server.logger.Infow("incoming RPC: ApplyLog",
-		logFields(h.server, "request_id", id, "request", request)...)
+		logFields(h.server, "request_id", requestID, "request", request)...)
 
 	if h.server.role() != Leader {
 		return &ApplyLogResponse{Error: ErrNonLeader}, nil
