@@ -190,7 +190,7 @@ func (s *configurationStore) InitiateTransition(next *Config) error {
 		return ErrInJointConsensus
 	}
 	c := latest.CopyInitiateTransition(next)
-	s.server.applyLogCh <- newFutureTask(LogBody{Type: LogConfiguration, Data: c.Encode()})
+	s.server.applyLogCh <- newFutureTask[any, any](LogBody{Type: LogConfiguration, Data: c.Encode()})
 	s.server.logger.Infow("a configuration transition has been initiated",
 		logFields(s.server, "configuration", c)...)
 	return nil
@@ -205,7 +205,7 @@ func (s *configurationStore) CommitTransition() error {
 		return ErrNotInJointConsensus
 	}
 	c := latest.CopyCommitTransition()
-	s.server.applyLogCh <- newFutureTask(LogBody{Type: LogConfiguration, Data: c.Encode()})
+	s.server.applyLogCh <- newFutureTask[any, any](LogBody{Type: LogConfiguration, Data: c.Encode()})
 	s.server.logger.Infow("a configuration transition has been committed",
 		logFields(s.server, "configuration", c)...)
 	return nil

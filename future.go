@@ -5,38 +5,38 @@ import (
 	"sync/atomic"
 )
 
-type futureResult struct {
-	value interface{}
+type futureResult[T any] struct {
+	value T
 	err   error
 }
 
 // Future represents an async task with an undetermined result.
-type Future interface {
-	Result() (interface{}, error)
-	setResult(value interface{}, err error)
+type Future[T any] interface {
+	Result() (T, error)
+	setResult(value T, err error)
 }
 
-type anyFuture struct {
-	result      atomic.Value // futureResult
+type anyFuture[T any] struct {
+	result      atomic.Value // futureResult[T]
 	mu          sync.Mutex   // protects subscribers
-	subscribers []chan futureResult
+	subscribers []chan futureResult[T]
 }
 
-func newFuture() Future {
-	return &anyFuture{subscribers: []chan futureResult{}}
+func newFuture[T any]() Future[T] {
+	return &anyFuture[T]{subscribers: []chan futureResult[T]{}}
 }
 
-func (f *anyFuture) Result() (interface{}, error) {
-	if result, ok := f.result.Load().(futureResult); ok {
+func (f *anyFuture[T]) Result() (T, error) {
+	if result, ok := f.result.Load().(futureResult[T]); ok {
 		return result.value, result.err
 	}
-	ch := make(chan futureResult, 1)
+	ch := make(chan futureResult[T], 1)
 	f.mu.Lock()
 	if f.subscribers == nil {
 		// The result has been set and fanned out to previous subscribers
 		f.mu.Unlock()
 		// Here the result will not be nil
-		result := f.result.Load().(futureResult)
+		result := f.result.Load().(futureResult[T])
 		return result.value, result.err
 	}
 	f.subscribers = append(f.subscribers, ch)
@@ -45,12 +45,12 @@ func (f *anyFuture) Result() (interface{}, error) {
 	return result.value, result.err
 }
 
-func (f *anyFuture) setResult(value interface{}, err error) {
-	if !f.result.CompareAndSwap(nil, futureResult{value: value, err: err}) {
+func (f *anyFuture[T]) setResult(value T, err error) {
+	if !f.result.CompareAndSwap(nil, futureResult[T]{value: value, err: err}) {
 		// Result has been set by previous calls.
 		return
 	}
-	result := f.result.Load().(futureResult)
+	result := f.result.Load().(futureResult[T])
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// Fan out to subscribers.
@@ -63,26 +63,26 @@ func (f *anyFuture) setResult(value interface{}, err error) {
 }
 
 // newErrorFuture returns an anyFuture that only has an error set as result
-func newErrorFuture(err error) Future {
-	f := newFuture()
+func newErrorFuture(err error) Future[any] {
+	f := newFuture[any]()
 	f.setResult(nil, err)
 	return f
 }
 
-type FutureTask interface {
-	Future
-	Task() interface{}
+type FutureTask[FUTURE any, TASK any] interface {
+	Future[FUTURE]
+	Task() TASK
 }
 
-type anyFutureTask struct {
-	Future
-	task interface{}
+type anyFutureTask[FUTURE any, TASK any] struct {
+	Future[FUTURE]
+	task TASK
 }
 
-func newFutureTask(task interface{}) FutureTask {
-	return &anyFutureTask{Future: newFuture(), task: task}
+func newFutureTask[FUTURE any, TASK any](task TASK) FutureTask[FUTURE, TASK] {
+	return &anyFutureTask[FUTURE, TASK]{Future: newFuture[FUTURE](), task: task}
 }
 
-func (t *anyFutureTask) Task() interface{} {
+func (t *anyFutureTask[FUTURE, TASK]) Task() TASK {
 	return t.task
 }

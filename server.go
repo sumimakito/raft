@@ -43,7 +43,7 @@ type ServerCoreOptions struct {
 
 type serverChannels struct {
 	noCopy
-	bootstrapCh chan FutureTask
+	bootstrapCh chan FutureTask[any, any]
 
 	// confCh receives updates on the configuration.
 	// Should be used only by the leader.
@@ -53,12 +53,12 @@ type serverChannels struct {
 
 	// applyLogCh receives log applying requests.
 	// Non-leader servers should redirect this request to the leader.
-	applyLogCh chan FutureTask
+	applyLogCh chan FutureTask[any, any]
 
 	// commitCh receives updates on the commit index.
 	commitCh chan uint64
 
-	snapshotCh chan FutureTask
+	snapshotCh chan FutureTask[any, any]
 
 	shutdownCh    chan error
 	terminalSigCh chan error
@@ -97,12 +97,12 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
 		serverState: serverState{stateRole: Follower},
 		commitState: commitState{},
 		serverChannels: serverChannels{
-			bootstrapCh:   make(chan FutureTask, 1),
+			bootstrapCh:   make(chan FutureTask[any, any], 1),
 			confCh:        make(chan *Configuration, 16),
 			rpcCh:         make(chan *RPC, 16),
-			applyLogCh:    make(chan FutureTask, 16),
+			applyLogCh:    make(chan FutureTask[any, any], 16),
 			commitCh:      make(chan uint64, 16),
-			snapshotCh:    make(chan FutureTask, 16),
+			snapshotCh:    make(chan FutureTask[any, any], 16),
 			shutdownCh:    make(chan error, 1),
 			terminalSigCh: make(chan error, 1),
 		},
@@ -216,7 +216,7 @@ func (s *Server) randomTimer(timeout time.Duration) *time.Timer {
 	return time.NewTimer(timeout + time.Duration(randomOffset))
 }
 
-func (s *Server) runBootstrap(futureTask FutureTask) {
+func (s *Server) runBootstrap(futureTask FutureTask[any, any]) {
 	// c, ok := futureTask.Task().(*Configuration)
 	// if !ok {
 	// 	s.logger.Panicw("received an unknown FutureTask in bootstrap", logFields(s)...)
@@ -507,8 +507,8 @@ func (s *Server) updateCommitIndex(commitIndex uint64) {
 
 // Apply.
 // Future(LogMeta, error)
-func (s *Server) Apply(ctx context.Context, log LogBody) FutureTask {
-	t := newFutureTask(log)
+func (s *Server) Apply(ctx context.Context, log LogBody) FutureTask[any, any] {
+	t := newFutureTask[any, any](log)
 	if s.role() == Leader {
 		// Leader path
 		select {
@@ -534,15 +534,15 @@ func (s *Server) Apply(ctx context.Context, log LogBody) FutureTask {
 
 // ApplyCommand.
 // Future(LogMeta, error)
-func (s *Server) ApplyCommand(ctx context.Context, command Command) FutureTask {
+func (s *Server) ApplyCommand(ctx context.Context, command Command) FutureTask[any, any] {
 	return s.Apply(ctx, LogBody{Type: LogCommand, Data: command})
 }
 
-func (s *Server) Bootstrap(c *Configuration) Future {
+func (s *Server) Bootstrap(c *Configuration) Future[any] {
 	if s.shutdownState() {
 		return newErrorFuture(ErrServerShutdown)
 	}
-	task := newFutureTask(c)
+	task := newFutureTask[any, any](c)
 	select {
 	case s.bootstrapCh <- task:
 		return task
