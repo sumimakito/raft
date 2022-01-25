@@ -197,15 +197,15 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) {
 }
 
 func (s *Server) handleRPC(rpc *RPC) {
-	switch request := rpc.Request.(type) {
+	switch request := rpc.Request().(type) {
 	case *pb.AppendEntriesRequest:
-		rpc.respond(s.rpcHandler.AppendEntries(context.Background(), rpc.requestID, request))
+		rpc.Respond(s.rpcHandler.AppendEntries(rpc.Context(), rpc.requestID, request))
 	case *pb.RequestVoteRequest:
-		rpc.respond(s.rpcHandler.RequestVote(context.Background(), rpc.requestID, request))
+		rpc.Respond(s.rpcHandler.RequestVote(rpc.Context(), rpc.requestID, request))
 	case *InstallSnapshotRequest:
-		rpc.respond(s.rpcHandler.InstallSnapshot(context.TODO(), rpc.requestID, request))
+		rpc.Respond(s.rpcHandler.InstallSnapshot(rpc.Context(), rpc.requestID, request))
 	case *pb.ApplyLogRequest:
-		rpc.respond(s.rpcHandler.ApplyLog(context.Background(), rpc.requestID, request))
+		rpc.Respond(s.rpcHandler.ApplyLog(rpc.Context(), rpc.requestID, request))
 	default:
 		s.logger.Warnw("incoming RPC is unrecognized", logFields(s, "request", rpc.Request)...)
 	}
@@ -532,6 +532,7 @@ func (s *Server) Apply(ctx context.Context, body *pb.LogBody) FutureTask[*pb.Log
 			if err != nil {
 				fu.setResult(nil, err)
 			}
+			// TODO: Crashes happen here sometimes.
 			switch r := response.Response.(type) {
 			case *pb.ApplyLogResponse_Meta:
 				fu.setResult(r.Meta, nil)

@@ -31,6 +31,17 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *pb.AppendEntriesRespon
 	var request *pb.AppendEntriesRequest
 	var lastLogIndex uint64
 
+	goto ENTRY
+
+WAIT_NEXT:
+	select {
+	case <-ctl.Cancelled():
+		return
+	case <-s.sched.server.randomTimer(s.sched.server.opts.followerTimeout / 10).C:
+		goto CHECK_INDEX
+	}
+
+ENTRY:
 	s.sched.server.logger.Infow("replication/heartbeat started",
 		logFields(s.sched.server, "replication_id", ctl.replID, "peer", s.peer)...)
 	defer s.sched.server.logger.Infow("replication/heartbeat stopped",
@@ -126,12 +137,7 @@ CHECK_INDEX:
 		resCh <- response
 	}
 
-	select {
-	case <-ctl.Cancelled():
-		return
-	case <-s.sched.server.randomTimer(s.sched.server.opts.followerTimeout / 10).C:
-		goto CHECK_INDEX
-	}
+	goto WAIT_NEXT
 
 REPLICATE:
 	select {
@@ -147,7 +153,8 @@ REPLICATE:
 			"peer", s.peer,
 			"request_id", requestID,
 			"request", request)...)
-	if response, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, request); err != nil {
+	response, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, request)
+	if err != nil {
 		s.sched.server.logger.Infow("error sending replication request",
 			logFields(s.sched.server,
 				"replication_id", ctl.replID,
@@ -155,35 +162,109 @@ REPLICATE:
 				"request_id", requestID,
 				"request", request,
 				"error", err)...)
-	} else {
-		if response.Success {
-			s.sched.server.logger.Debugw("successful replication response",
-				logFields(s.sched.server,
-					"replication_id", ctl.replID,
-					"peer", s.peer,
-					"request_id", requestID,
-					"response", response)...)
-			s.nextIndex = lastLogIndex + 1
-			s.sched.updateMatchIndex(s.peer.Id, lastLogIndex)
-		} else {
-			s.sched.server.logger.Debugw("unsuccessful replication repsonse",
-				logFields(s.sched.server,
-					"replication_id", ctl.replID,
-					"peer", s.peer,
-					"request_id", requestID,
-					"response", response,
-					"next_next_index", s.nextIndex-1)...)
-			s.nextIndex = s.nextIndex - 1
-		}
-		resCh <- response
+		goto WAIT_NEXT
 	}
 
+	if response.Success {
+		s.sched.server.logger.Debugw("successful replication response",
+			logFields(s.sched.server,
+				"replication_id", ctl.replID,
+				"peer", s.peer,
+				"request_id", requestID,
+				"response", response)...)
+		s.nextIndex = lastLogIndex + 1
+		s.sched.updateMatchIndex(s.peer.Id, lastLogIndex)
+	} else {
+		s.sched.server.logger.Debugw("unsuccessful replication repsonse",
+			logFields(s.sched.server,
+				"replication_id", ctl.replID,
+				"peer", s.peer,
+				"request_id", requestID,
+				"response", response)...)
+		goto INSTALL_SNAPSHOT
+		// s.nextIndex = s.nextIndex - 1
+	}
+	resCh <- response
+
+	goto WAIT_NEXT
+
+INSTALL_SNAPSHOT:
 	select {
 	case <-ctl.Cancelled():
 		return
-	case <-s.sched.server.randomTimer(s.sched.server.opts.followerTimeout / 10).C:
-		goto CHECK_INDEX
+	default:
 	}
+
+	s.sched.server.logger.Infow("ready to install snapshot",
+		logFields(s.sched.server,
+			"replication_id", ctl.replID,
+			"peer", s.peer)...)
+
+	metadataList, err := s.sched.server.snapshot.List()
+	if err != nil {
+		s.sched.server.logger.Infow("error listing snapshots",
+			logFields(s.sched.server,
+				"replication_id", ctl.replID,
+				"peer", s.peer,
+				"error", err)...)
+		goto WAIT_NEXT
+	}
+
+	if len(metadataList) == 0 {
+		s.sched.server.logger.Infow("no snapshots to install",
+			logFields(s.sched.server,
+				"replication_id", ctl.replID,
+				"peer", s.peer)...)
+		goto WAIT_NEXT
+	}
+
+	snapshotMeta, snapshotReader, err := s.sched.server.snapshot.Open(metadataList[0].Id())
+	if err != nil {
+		s.sched.server.logger.Infow("error opening snapshot",
+			logFields(s.sched.server,
+				"replication_id", ctl.replID,
+				"peer", s.peer,
+				"snapshot_id", snapshotMeta.Id(),
+				"error", err)...)
+		goto WAIT_NEXT
+	}
+
+	snapshotMetaBytes, err := snapshotMeta.Encode()
+	if err != nil {
+		s.sched.server.logger.Infow("error encoding snapshot metadata",
+			logFields(s.sched.server,
+				"replication_id", ctl.replID,
+				"peer", s.peer,
+				"snapshot_id", snapshotMeta.Id(),
+				"error", err)...)
+		goto WAIT_NEXT
+	}
+
+	requestMeta := &pb.InstallSnapshotRequestMeta{
+		Term:              s.sched.server.currentTerm(),
+		LeaderId:          s.sched.server.Leader().Id,
+		LastIncludedIndex: snapshotMeta.Index(),
+		LastIncludedTerm:  snapshotMeta.Term(),
+		SnapshotMetadata:  snapshotMetaBytes,
+	}
+
+	if _, err := s.sched.server.trans.InstallSnapshot(ctl.Context(), s.peer, requestMeta, snapshotReader); err != nil {
+		s.sched.server.logger.Infow("error installing snapshot",
+			logFields(s.sched.server,
+				"replication_id", ctl.replID,
+				"peer", s.peer,
+				"snapshot_id", snapshotMeta.Id(),
+				"error", err)...)
+		goto WAIT_NEXT
+	}
+
+	s.sched.server.logger.Infow("snapshot installed",
+		logFields(s.sched.server,
+			"replication_id", ctl.replID,
+			"peer", s.peer,
+			"snapshot_id", snapshotMeta.Id())...)
+
+	goto WAIT_NEXT
 }
 
 func (s *replState) Replicate(replID string, resCh chan<- *pb.AppendEntriesResponse) {
@@ -377,7 +458,7 @@ func (r *replScheduler) Start() <-chan *pb.AppendEntriesResponse {
 				configuration: c,
 				nextIndex:     r.server.lastLogIndex(),
 			}
-			r.matchIndexes.Store(p.Id, 0)
+			r.matchIndexes.Store(p.Id, uint64(0))
 		}
 	}
 	for _, s := range r.states {
