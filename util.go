@@ -81,12 +81,36 @@ func NewBufferedReadCloser(r io.ReadCloser) *BufferedReadCloser {
 	}
 }
 
+func (r *BufferedReadCloser) Close() error {
+	return r.closer.Close()
+}
+
 func (r *BufferedReadCloser) Read(p []byte) (n int, err error) {
 	return r.reader.Read(p)
 }
 
-func (r *BufferedReadCloser) Close() error {
-	return r.closer.Close()
+type BufferedWriteCloser struct {
+	writer *bufio.Writer
+	closer io.Closer
+}
+
+func NewBufferedWriteCloser(w io.WriteCloser) *BufferedWriteCloser {
+	return &BufferedWriteCloser{
+		writer: bufio.NewWriter(w),
+		closer: w,
+	}
+}
+
+func (w *BufferedWriteCloser) Close() error {
+	return w.closer.Close()
+}
+
+func (w *BufferedWriteCloser) Flush() error {
+	return w.writer.Flush()
+}
+
+func (w *BufferedWriteCloser) Write(p []byte) (n int, err error) {
+	return w.writer.Write(p)
 }
 
 // CappedSlice is a ring buffer like slice which holds a maximum of `cap` items.
