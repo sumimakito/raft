@@ -49,28 +49,24 @@ type SnapshotStore interface {
 // the SnapshotPolicy.
 type snapshotScheduler struct {
 	server *Server
+	mu     sync.Mutex
 
-	ctlMu   sync.Mutex // protects ctl, started and stopped
-	ctl     *asyncCtl
-	started bool
-	stopped bool
-
-	applyCounterMu sync.Mutex // protects applyCounter
-	applyCounter   int
-
+	interval  time.Duration
 	applies   int
 	appliesCh chan struct{}
 
-	interval time.Duration
+	ctl *asyncCtl
+
+	applyCounter int
 }
 
 func newSnapshotScheduler(server *Server) *snapshotScheduler {
 	return &snapshotScheduler{
 		server:    server,
 		ctl:       newAsyncCtl(),
+		interval:  server.opts.snapshotPolicy.Interval,
 		applies:   server.opts.snapshotPolicy.Applies,
 		appliesCh: make(chan struct{}, 1),
-		interval:  server.opts.snapshotPolicy.Interval,
 	}
 }
 
@@ -105,49 +101,55 @@ func (s *snapshotScheduler) RecordApply() {
 		// "Applies" in the SnapshotPolicy is disabled.
 		return
 	}
-	s.applyCounterMu.Lock()
+	s.mu.Lock()
+
 	s.applyCounter += 1
 	if s.applyCounter >= s.applies {
 		s.applyCounter = 0
-		s.applyCounterMu.Unlock()
+		s.mu.Unlock()
 		select {
 		case s.appliesCh <- struct{}{}:
 		case <-time.NewTimer(s.interval).C:
+		case <-s.ctl.Cancelled():
 		}
 	} else {
-		s.applyCounterMu.Unlock()
+		s.mu.Unlock()
 	}
 }
 
 func (s *snapshotScheduler) Start() {
-	s.ctlMu.Lock()
-	defer s.ctlMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if s.started {
+	if s.ctl != nil {
 		s.server.logger.Panic("attempt to start a started snapshotScheduler")
 	}
 
-	if s.stopped {
+	select {
+	case <-s.ctl.Cancelled():
 		s.server.logger.Panic("attempt to reuse a stopped snapshotScheduler")
+	default:
 	}
 
-	s.started = true
+	s.ctl = newAsyncCtl()
 
 	go s.schedule(s.ctl)
 }
 
 func (s *snapshotScheduler) Stop() {
-	s.ctlMu.Lock()
-	defer s.ctlMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if !s.started {
+	if s.ctl == nil {
 		s.server.logger.Panic("attempt to stop a snapshotScheduler which is not started")
 	}
 
-	if s.stopped {
+	select {
+	case <-s.ctl.Cancelled():
 		s.server.logger.Panic("attempt to stop a stopped snapshotScheduler")
+	default:
+		s.ctl.Cancel()
 	}
 
-	s.ctl.Cancel()
-	s.ctl.WaitRelease()
+	<-s.ctl.WaitRelease()
 }

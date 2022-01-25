@@ -37,12 +37,7 @@ func (c *asyncCtl) Release() {
 	close(c.waitCh)
 }
 
-// WaitRelease is used to wait for the operation to cancel/stop.
-func (c *asyncCtl) WaitRelease() {
-	<-c.waitCh
-}
-
-// WaitReleaseCh is used with select to wait for the operation to cancel/stop.
-func (c *asyncCtl) WaitReleaseCh() <-chan struct{} {
+// WaitRelease is used with select to wait for the operation to cancel/stop.
+func (c *asyncCtl) WaitRelease() <-chan struct{} {
 	return c.waitCh
 }

@@ -22,32 +22,37 @@ type apiServiceServer struct {
 }
 
 func (s *apiServiceServer) Apply(ctx context.Context, body *pb.LogBody) (*pb.ApplyLogResponse, error) {
-	logBody := LogBody{Data: body.Data}
-	switch body.Type {
-	case pb.LogType_LOG_COMMAND:
-		logBody.Type = LogCommand
-	case pb.LogType_LOG_CONFIGURATION:
-		logBody.Type = LogConfiguration
-	}
-	result, err := s.server.Apply(ctx, logBody).Result()
+	result, err := s.server.Apply(ctx, body.Copy()).Result()
 	if err != nil {
-		return &pb.ApplyLogResponse{Error: err.Error()}, nil
+		return &pb.ApplyLogResponse{
+			Response: &pb.ApplyLogResponse_Error{Error: err.Error()},
+		}, nil
 	}
-	logMeta := result.(LogMeta)
-	return &pb.ApplyLogResponse{Meta: &pb.LogMeta{Index: logMeta.Index, Term: logMeta.Term}}, nil
+	return &pb.ApplyLogResponse{
+		Response: &pb.ApplyLogResponse_Meta{
+			Meta: &pb.LogMeta{Index: result.Index, Term: result.Term},
+		},
+	}, nil
 }
 
 func (s *apiServiceServer) ApplyCommand(ctx context.Context, cmd *pb.Command) (*pb.ApplyLogResponse, error) {
 	result, err := s.server.ApplyCommand(ctx, cmd.Data).Result()
 	if err != nil {
-		return &pb.ApplyLogResponse{Error: err.Error()}, nil
+		return &pb.ApplyLogResponse{
+			Response: &pb.ApplyLogResponse_Error{
+				Error: err.Error(),
+			},
+		}, nil
 	}
-	logMeta := result.(LogMeta)
-	return &pb.ApplyLogResponse{Meta: &pb.LogMeta{Index: logMeta.Index, Term: logMeta.Term}}, nil
+	return &pb.ApplyLogResponse{
+		Response: &pb.ApplyLogResponse_Meta{
+			Meta: &pb.LogMeta{Index: result.Index, Term: result.Term},
+		},
+	}, nil
 }
 
 type apiMembersAddRequest struct {
-	ID       string `json:"id"`
+	Id       string `json:"id"`
 	Endpoint string `json:"endpoint"`
 }
 
@@ -130,11 +135,11 @@ func (s *apiServer) setupRouters() *mux.Router {
 			if err != nil {
 				return nil, 0, err
 			}
-			result, err := s.server.Apply(r.Context(), LogBody{Type: LogCommand, Data: bodyData}).Result()
+			result, err := s.server.Apply(r.Context(), &pb.LogBody{Type: pb.LogType_COMMAND, Data: bodyData}).Result()
 			if err != nil {
 				return nil, 0, err
 			}
-			return result.(LogMeta), 0, nil
+			return result, 0, nil
 		})
 	}).Methods("POST")
 
@@ -159,9 +164,9 @@ func (s *apiServer) setupRouters() *mux.Router {
 			if err := json.Unmarshal(body, &apiRequest); err != nil {
 				return nil, 0, err
 			}
-			if err := s.server.Register(Peer{
-				ID:       ServerID(apiRequest.ID),
-				Endpoint: ServerEndpoint(apiRequest.Endpoint),
+			if err := s.server.Register(&pb.Peer{
+				Id:       apiRequest.Id,
+				Endpoint: apiRequest.Endpoint,
 			}); err != nil {
 				return apiErrorResponse{Error: err}, http.StatusBadRequest, nil
 			}
@@ -182,4 +187,8 @@ func (s *apiServer) Serve(listener net.Listener) error {
 			"address", listener.Addr(),
 			"endpoint", fmt.Sprintf("http://%s", listener.Addr()))...)
 	return s.httpServer.Serve(listener)
+}
+
+func (s *apiServer) Stop() error {
+	return s.httpServer.Shutdown(context.Background())
 }

@@ -6,35 +6,35 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/sumimakito/raft/pb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
-type ServerID string
-
-type ServerEndpoint string
-
 type ServerInfo struct {
-	ID       ServerID       `json:"id"`
-	Endpoint ServerEndpoint `json:"endpoint"`
+	ID       string `json:"id"`
+	Endpoint string `json:"endpoint"`
 }
 
 type ServerStates struct {
-	ID                ServerID       `json:"id"`
-	Endpoint          ServerEndpoint `json:"endpoint"`
-	Leader            Peer           `json:"leader"`
-	Role              ServerRole     `json:"role"`
-	CurrentTerm       uint64         `json:"current_term"`
-	LastLogIndex      uint64         `json:"last_log_index"`
-	LastVoteTerm      uint64         `json:"last_vote_term"`
-	LastVoteCandidate ServerID       `json:"last_vote_candidate"`
-	CommitIndex       uint64         `json:"commit_index"`
+	ID                string   `json:"id"`
+	Endpoint          string   `json:"endpoint"`
+	Leader            *pb.Peer `json:"leader"`
+	Role              string   `json:"role"`
+	CurrentTerm       uint64   `json:"current_term"`
+	LastLogIndex      uint64   `json:"last_log_index"`
+	LastVoteTerm      uint64   `json:"last_vote_term"`
+	LastVoteCandidate string   `json:"last_vote_candidate"`
+	CommitIndex       uint64   `json:"commit_index"`
 }
 
 type ServerCoreOptions struct {
-	ID           ServerID
+	ID           string
 	Log          LogStore
 	StateMachine StateMachine
 	Snapshot     SnapshotStore
@@ -53,24 +53,24 @@ type serverChannels struct {
 
 	// applyLogCh receives log applying requests.
 	// Non-leader servers should redirect this request to the leader.
-	applyLogCh chan FutureTask[any, any]
+	applyLogCh chan FutureTask[*pb.LogMeta, *pb.LogBody]
 
 	// commitCh receives updates on the commit index.
 	commitCh chan uint64
 
 	snapshotCh chan FutureTask[any, any]
 
-	shutdownCh    chan error
-	terminalSigCh chan error
+	shutdownCh chan error
+	serveErrCh chan error
 }
 
 type Server struct {
-	id        ServerID
+	id        string
 	opts      *serverOptions
 	serveFlag uint32
 	logger    *zap.SugaredLogger
 
-	clusterLeader atomic.Value // Peer
+	clusterLeader atomic.Value // *Peer
 
 	stable *stableStore
 	serverState
@@ -89,6 +89,8 @@ type Server struct {
 	logStore LogStore
 	snapshot SnapshotStore
 	trans    Transport
+
+	shutdownOnce sync.Once
 }
 
 func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
@@ -97,14 +99,14 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
 		serverState: serverState{stateRole: Follower},
 		commitState: commitState{},
 		serverChannels: serverChannels{
-			bootstrapCh:   make(chan FutureTask[any, any], 1),
-			confCh:        make(chan *Configuration, 16),
-			rpcCh:         make(chan *RPC, 16),
-			applyLogCh:    make(chan FutureTask[any, any], 16),
-			commitCh:      make(chan uint64, 16),
-			snapshotCh:    make(chan FutureTask[any, any], 16),
-			shutdownCh:    make(chan error, 1),
-			terminalSigCh: make(chan error, 1),
+			bootstrapCh: make(chan FutureTask[any, any], 1),
+			confCh:      make(chan *Configuration, 16),
+			rpcCh:       make(chan *RPC, 16),
+			applyLogCh:  make(chan FutureTask[*pb.LogMeta, *pb.LogBody], 16),
+			commitCh:    make(chan uint64, 16),
+			snapshotCh:  make(chan FutureTask[any, any], 16),
+			shutdownCh:  make(chan error, 8),
+			serveErrCh:  make(chan error, 8),
 		},
 		logStore: coreOpts.Log,
 		trans:    coreOpts.Transport,
@@ -134,11 +136,11 @@ func (s *Server) alterCommitIndex(commitIndex uint64) {
 
 func (s *Server) alterConfiguration(c *Configuration) {
 	s.confStore.SetLatest(c)
-	s.logger.Infow("configuration has been updated", logFields(s, "configuration", c)...)
+	s.logger.Infow("configuration has been updated", logFields(s, zap.Reflect("configuration", c))...)
 }
 
-func (s *Server) alterLeader(leader Peer) {
-	s.logger.Infow("alter leader", logFields(s, "new_leader", leader)...)
+func (s *Server) alterLeader(leader *pb.Peer) {
+	s.logger.Infow("alter leader", logFields(s, zap.Reflect("new_leader", leader))...)
 	s.setLeader(leader)
 }
 
@@ -153,7 +155,7 @@ func (s *Server) alterTerm(term uint64) {
 }
 
 // stepdownFollower converts the server into a follower
-func (s *Server) stepdownFollower(leader Peer) {
+func (s *Server) stepdownFollower(leader *pb.Peer) {
 	if s.role() < Follower {
 		s.logger.Panicw("stepdownFollower() requires the server to have a role which is higher than follower",
 			logFields(s)...)
@@ -165,20 +167,20 @@ func (s *Server) stepdownFollower(leader Peer) {
 // appendLogs submits the logs to the log store and updates the index states.
 // NOT safe for concurrent use.
 // Should be used by non-leader servers.
-func (s *Server) appendLogs(bodies []LogBody) {
+func (s *Server) appendLogs(bodies []*pb.LogBody) {
 	lastLogIndex := s.logStore.LastIndex()
 	term := s.currentTerm()
 	lastCfgArrayIndex := len(bodies)
-	logs := make([]*Log, len(bodies))
-	for i := range bodies {
-		logs[i] = &Log{
-			LogMeta: LogMeta{
+	logs := make([]*pb.Log, len(bodies))
+	for i, body := range bodies {
+		logs[i] = &pb.Log{
+			Meta: &pb.LogMeta{
 				Index: lastLogIndex + 1 + uint64(i),
 				Term:  term,
 			},
-			LogBody: LogBody{Type: bodies[i].Type, Data: append(([]byte)(nil), bodies[i].Data...)},
+			Body: body.Copy(),
 		}
-		if logs[i].Type == LogConfiguration {
+		if logs[i].Body.Type == pb.LogType_CONFIGURATION {
 			lastCfgArrayIndex = i
 		}
 	}
@@ -186,26 +188,30 @@ func (s *Server) appendLogs(bodies []LogBody) {
 	s.setLastLogIndex(s.logStore.LastIndex())
 	if lastCfgArrayIndex < len(logs) {
 		log := logs[lastCfgArrayIndex]
-		c := &Configuration{logIndex: log.Index}
-		c.Decode(log.Data)
+		var pbConfiguration pb.Configuration
+		Must1(proto.Unmarshal(log.Body.Data, &pbConfiguration))
+		c := newConfiguration(&pbConfiguration)
+		c.logIndex = log.Meta.Index
 		s.confCh <- c
 	}
 }
 
 func (s *Server) handleRPC(rpc *RPC) {
 	switch request := rpc.Request.(type) {
-	case *AppendEntriesRequest:
+	case *pb.AppendEntriesRequest:
 		rpc.respond(s.rpcHandler.AppendEntries(context.Background(), rpc.requestID, request))
-	case *RequestVoteRequest:
+	case *pb.RequestVoteRequest:
 		rpc.respond(s.rpcHandler.RequestVote(context.Background(), rpc.requestID, request))
-	case *ApplyLogRequest:
+	case *pb.InstallSnapshotRequest:
+		rpc.respond(s.rpcHandler.InstallSnapshot(context.TODO(), rpc.requestID, request))
+	case *pb.ApplyLogRequest:
 		rpc.respond(s.rpcHandler.ApplyLog(context.Background(), rpc.requestID, request))
 	default:
 		s.logger.Warnw("incoming RPC is unrecognized", logFields(s, "request", rpc.Request)...)
 	}
 }
 
-func (s *Server) handleFinale() {
+func (s *Server) handleTerminal() {
 	sig := <-terminalSignalCh()
 	s.shutdownCh <- nil
 	s.logger.Infow("terminal signal captured", logFields(s, "signal", sig)...)
@@ -256,27 +262,29 @@ func (s *Server) runLoopLeader() {
 		case t := <-s.bootstrapCh:
 			t.setResult(nil, ErrNonFollower)
 		case t := <-s.applyLogCh:
-			body := t.Task().(LogBody)
-			log := &Log{
-				LogMeta: LogMeta{
+			body := t.Task()
+			log := &pb.Log{
+				Meta: &pb.LogMeta{
 					Index: s.logStore.LastIndex() + 1,
 					Term:  s.currentTerm(),
 				},
-				LogBody: LogBody{Type: body.Type, Data: append(([]byte)(nil), body.Data...)},
+				Body: body.Copy(),
 			}
-			if log.Type == LogConfiguration {
-				c := &Configuration{logIndex: log.Index}
-				c.Decode(log.Data)
+			if log.Body.Type == pb.LogType_CONFIGURATION {
+				var pbConfiguration pb.Configuration
+				Must1(proto.Unmarshal(log.Body.Data, &pbConfiguration))
+				c := newConfiguration(&pbConfiguration)
+				c.logIndex = log.Meta.Index
 				s.repl.Stop()
-				s.logStore.AppendLogs([]*Log{log})
+				s.logStore.AppendLogs([]*pb.Log{log})
 				s.setLastLogIndex(s.logStore.LastIndex())
 				s.alterConfiguration(c)
-				t.setResult(log.LogMeta, nil)
+				t.setResult(log.Meta, nil)
 				return
 			}
-			s.logStore.AppendLogs([]*Log{log})
+			s.logStore.AppendLogs([]*pb.Log{log})
 			s.setLastLogIndex(s.logStore.LastIndex())
-			t.setResult(log.LogMeta, nil)
+			t.setResult(log.Meta, nil)
 		case commitIndex := <-s.commitCh:
 			s.updateCommitIndex(commitIndex)
 		case rpc := <-s.trans.RPC():
@@ -284,7 +292,7 @@ func (s *Server) runLoopLeader() {
 		case <-s.snapshotCh:
 			s.stateMachine.Snapshot()
 		case err := <-s.shutdownCh:
-			s.runShutdown(err)
+			s.internalShutdown(err)
 			return
 		}
 	}
@@ -311,14 +319,14 @@ func (s *Server) runLoopCandidate() {
 				s.alterTerm(response.Term)
 				return
 			}
-			if c.Current.Contains(response.ServerID) {
+			if c.CurrentConfig().Contains(response.ServerId) {
 				currentVotes++
 			}
-			if c.Joint() && c.Next.Contains(response.ServerID) {
+			if c.Joint() && c.NextConfig().Contains(response.ServerId) {
 				nextVotes++
 			}
 			if !c.Joint() {
-				if currentVotes >= c.Current.Quorum() {
+				if currentVotes >= c.CurrentConfig().Quorum() {
 					voteCancel()
 					s.logger.Infow("won the election", logFields(s)...)
 					s.alterRole(Leader)
@@ -327,7 +335,7 @@ func (s *Server) runLoopCandidate() {
 					return
 				}
 			} else {
-				if currentVotes >= c.Current.Quorum() && nextVotes >= c.Next.Quorum() {
+				if currentVotes >= c.CurrentConfig().Quorum() && nextVotes >= c.NextConfig().Quorum() {
 					voteCancel()
 					s.logger.Infow("won the election", logFields(s)...)
 					s.alterRole(Leader)
@@ -351,7 +359,7 @@ func (s *Server) runLoopCandidate() {
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
 			voteCancel()
-			s.runShutdown(err)
+			s.internalShutdown(err)
 			return
 		}
 	}
@@ -379,21 +387,35 @@ func (s *Server) runLoopFollower() {
 			followerTimer.Reset(s.opts.followerTimeout)
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
-			s.runShutdown(err)
+			s.internalShutdown(err)
 			return
 		}
 	}
 }
+func (s *Server) serveAPIServer() {
+	rand.Seed(time.Now().UnixNano())
+	bindAddress := s.opts.apiServerListenAddress
+	if bindAddress == "" {
+		bindAddress = fmt.Sprintf("0.0.0.0:%d", 20000+rand.Intn(25001))
+	}
+	listener, err := net.Listen("tcp", bindAddress)
+	if err != nil {
+		s.logger.Warn(err)
+	}
+	if err := s.apiServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+		s.logger.Warn(err)
+	}
+}
 
-func (s *Server) runShutdown(err error) {
-	// atomically set the shutdown flag once
+func (s *Server) internalShutdown(err error) {
 	if !s.setShutdownState() {
 		return
 	}
-	s.logger.Infow("ready to shutdown", logFields(s, "error", err)...)
-	// Send err (if any) to the terminal channel
-	s.terminalSigCh <- err
-	defer close(s.terminalSigCh)
+	s.logger.Infow("ready to shutdown", logFields(s, zap.Error(err))...)
+	if err := s.apiServer.Stop(); err != nil {
+		s.logger.Warnw("error occurred stopping the API server", logFields(s, zap.Error(err))...)
+	}
+	s.snapshotSched.Stop()
 	// Close the Transport
 	if closer, ok := s.trans.(TransportCloser); ok {
 		closer.Close()
@@ -401,26 +423,11 @@ func (s *Server) runShutdown(err error) {
 	} else {
 		s.logger.Infow(fmt.Sprintf("transport %T does not implement interface TransportCloser", s.trans), logFields(s)...)
 	}
+	// Send err (if any) to the serve error channel
+	s.serveErrCh <- err
 }
 
-func (s *Server) serveAPIServer() {
-	for !s.shutdownState() {
-		rand.Seed(time.Now().UnixNano())
-		bindAddress := s.opts.apiServerListenAddress
-		if bindAddress == "" {
-			bindAddress = fmt.Sprintf("0.0.0.0:%d", 20000+rand.Intn(25001))
-		}
-		listener, err := net.Listen("tcp", bindAddress)
-		if err != nil {
-			s.logger.Warn(err)
-		}
-		if err := s.apiServer.Serve(listener); err != nil {
-			s.logger.Warn(err)
-		}
-	}
-}
-
-func (s *Server) startElection() (<-chan *RequestVoteResponse, context.CancelFunc) {
+func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.CancelFunc) {
 	s.logger.Infow("ready to start the election", logFields(s)...)
 	s.alterTerm(s.currentTerm() + 1)
 	s.setLastVoteSummary(s.currentTerm(), s.id)
@@ -429,18 +436,18 @@ func (s *Server) startElection() (<-chan *RequestVoteResponse, context.CancelFun
 	voteCtx, voteCancel := context.WithCancel(context.Background())
 
 	c := s.confStore.Latest()
-	resCh := make(chan *RequestVoteResponse, len(c.Peers()))
+	resCh := make(chan *pb.RequestVoteResponse, len(c.Peers()))
 
 	lastTerm, lastIndex := s.logStore.LastTermIndex()
 
-	request := &RequestVoteRequest{
+	request := &pb.RequestVoteRequest{
 		Term:         s.currentTerm(),
-		CandidateID:  s.id,
+		CandidateId:  s.id,
 		LastLogIndex: lastIndex,
 		LastLogTerm:  lastTerm,
 	}
 
-	requestVote := func(peer Peer) {
+	requestVote := func(peer *pb.Peer) {
 		if response, err := s.trans.RequestVote(voteCtx, peer, request); err != nil {
 			s.logger.Debugw("error requesting vote", logFields(s, "error", err)...)
 		} else {
@@ -450,13 +457,13 @@ func (s *Server) startElection() (<-chan *RequestVoteResponse, context.CancelFun
 
 	for _, peer := range c.Peers() {
 		// Do not ask ourself to vote
-		if peer.ID == s.id {
+		if peer.Id == s.id {
 			continue
 		}
 		go requestVote(peer)
 	}
 
-	resCh <- &RequestVoteResponse{ServerID: s.id, Term: s.currentTerm(), VoteGranted: true}
+	resCh <- &pb.RequestVoteResponse{ServerId: s.id, Term: s.currentTerm(), Granted: true}
 
 	return resCh, voteCancel
 }
@@ -488,15 +495,17 @@ func (s *Server) updateCommitIndex(commitIndex uint64) {
 			// We've found one or more gaps in the logs
 			s.logger.Panicw("one or more log gaps are detected", logFields(s, "missing_index", i)...)
 		}
-		switch log.Type {
-		case LogCommand:
-			s.stateMachine.Apply(log.Index, log.Term, log.Data)
-		case LogConfiguration:
-			c := &Configuration{logIndex: log.Index}
-			c.Decode(log.Data)
+		switch log.Body.Type {
+		case pb.LogType_COMMAND:
+			s.stateMachine.Apply(log.Meta.Index, log.Meta.Term, log.Body.Data)
+		case pb.LogType_CONFIGURATION:
+			var pbConfiguration pb.Configuration
+			Must1(proto.Unmarshal(log.Body.Data, &pbConfiguration))
+			c := newConfiguration(&pbConfiguration)
+			c.logIndex = log.Meta.Index
 			// If the latest configuration is in a joint consensus, commit the joint consensus
 			// and append the post-transition configuration.
-			if latest := s.confStore.Latest(); latest.Joint() && latest.logIndex == log.Index {
+			if latest := s.confStore.Latest(); latest.Joint() && latest.logIndex == log.Meta.Index {
 				Must1(s.confStore.CommitTransition())
 			}
 		}
@@ -507,35 +516,40 @@ func (s *Server) updateCommitIndex(commitIndex uint64) {
 
 // Apply.
 // Future(LogMeta, error)
-func (s *Server) Apply(ctx context.Context, log LogBody) FutureTask[any, any] {
-	t := newFutureTask[any, any](log)
+func (s *Server) Apply(ctx context.Context, body *pb.LogBody) FutureTask[*pb.LogMeta, *pb.LogBody] {
+	fu := newFutureTask[*pb.LogMeta](body.Copy())
 	if s.role() == Leader {
 		// Leader path
 		select {
-		case s.applyLogCh <- t:
+		case s.applyLogCh <- fu:
 		case <-ctx.Done():
-			t.setResult(nil, ErrDeadlineExceeded)
+			fu.setResult(nil, ErrDeadlineExceeded)
 		}
 	} else {
 		go func() {
 			// Redirect requests to the leader on non-leader servers.
-			response, err := s.trans.ApplyLog(ctx, s.Leader(), &ApplyLogRequest{Body: log})
+			response, err := s.trans.ApplyLog(ctx, s.Leader(), &pb.ApplyLogRequest{Body: body.Copy()})
 			if err != nil {
-				t.setResult(nil, err)
+				fu.setResult(nil, err)
 			}
-			if response.Error != nil {
-				t.setResult(nil, response.Error)
+			switch r := response.Response.(type) {
+			case *pb.ApplyLogResponse_Meta:
+				fu.setResult(r.Meta, nil)
+			case *pb.ApplyLogResponse_Error:
+				fu.setResult(nil, errors.New(r.Error))
 			}
-			t.setResult(response.Meta, nil)
 		}()
 	}
-	return t
+	return fu
 }
 
 // ApplyCommand.
 // Future(LogMeta, error)
-func (s *Server) ApplyCommand(ctx context.Context, command Command) FutureTask[any, any] {
-	return s.Apply(ctx, LogBody{Type: LogCommand, Data: command})
+func (s *Server) ApplyCommand(ctx context.Context, command Command) FutureTask[*pb.LogMeta, *pb.LogBody] {
+	return s.Apply(ctx, &pb.LogBody{
+		Type: pb.LogType_COMMAND,
+		Data: command,
+	})
 }
 
 func (s *Server) Bootstrap(c *Configuration) Future[any] {
@@ -547,7 +561,7 @@ func (s *Server) Bootstrap(c *Configuration) Future[any] {
 	case s.bootstrapCh <- task:
 		return task
 	case err := <-s.shutdownCh:
-		s.runShutdown(err)
+		s.internalShutdown(err)
 		return newErrorFuture(ErrServerShutdown)
 	}
 }
@@ -556,12 +570,12 @@ func (s *Server) StateMachine() StateMachine {
 	return s.stateMachine.stateMachine
 }
 
-func (s *Server) ID() ServerID {
+func (s *Server) ID() string {
 	return s.id
 }
 
-func (s *Server) Endpoint() ServerEndpoint {
-	return ServerEndpoint(s.trans.Endpoint())
+func (s *Server) Endpoint() string {
+	return s.trans.Endpoint()
 }
 
 func (s *Server) Info() ServerInfo {
@@ -571,28 +585,33 @@ func (s *Server) Info() ServerInfo {
 	}
 }
 
-func (s *Server) Leader() Peer {
-	if v := s.clusterLeader.Load(); v != nil {
-		return v.(Peer)
+func (s *Server) Leader() *pb.Peer {
+	if v := s.clusterLeader.Load(); v != nil && v != nilPeer {
+		return v.(*pb.Peer)
 	}
 	return nilPeer
 }
 
-func (s *Server) setLeader(leader Peer) {
+func (s *Server) setLeader(leader *pb.Peer) {
+	if leader == nil {
+		leader = nilPeer
+	}
 	s.clusterLeader.Store(leader)
 }
 
-func (s *Server) Register(peer Peer) error {
+func (s *Server) Register(peer *pb.Peer) error {
 	latest := s.confStore.Latest()
 	next := latest.Current.Copy()
 	next.Peers = append(next.Peers, peer)
-	return s.confStore.InitiateTransition(next)
+	return s.confStore.InitiateTransition(newConfig(next))
 }
 
 func (s *Server) Serve() error {
 	if !atomic.CompareAndSwapUint32(&s.serveFlag, 0, 1) {
 		return errors.New("Serve() can only be called once")
 	}
+
+	go s.handleTerminal()
 
 	c := s.confStore.Latest()
 
@@ -602,7 +621,7 @@ func (s *Server) Serve() error {
 		// The server should be a node in a restored cluster.
 		selfRegistered := false
 		for _, peer := range c.Peers() {
-			if s.id == peer.ID {
+			if s.id == peer.Id {
 				// Check for an edge condition
 				if s.Endpoint() != peer.Endpoint {
 					s.logger.Panicw("confusing condition: two servers have the same ID but different endpoints",
@@ -617,27 +636,35 @@ func (s *Server) Serve() error {
 	} else {
 		// The latest configuration does not contain any peers.
 		// The server should be the first node in the cluster.
-		c := &Configuration{
-			Current: newConfig([]Peer{
-				{ID: s.id, Endpoint: s.Endpoint()},
-			}),
-		}
+		c := newConfiguration(&pb.Configuration{
+			Current: &pb.Config{
+				Peers: []*pb.Peer{{Id: s.id, Endpoint: s.Endpoint()}},
+			},
+		})
 		s.confStore.ArbitraryAppend(c)
 	}
 
-	go s.handleFinale()
 	if s.opts.metricsExporter != nil {
 		go s.startMetrics(s.opts.metricsExporter)
 	}
-	go s.trans.Serve()
+
+	go func() {
+		if err := s.trans.Serve(); err != nil {
+			s.internalShutdown(err)
+		}
+	}()
+
 	go s.serveAPIServer()
 
 	s.snapshotSched.Start()
-	defer s.snapshotSched.Stop()
 
 	go s.runMainLoop()
 
-	return <-s.terminalSigCh
+	return <-s.serveErrCh
+}
+
+func (s *Server) Shutdown(err error) {
+	s.shutdownCh <- err
 }
 
 func (s *Server) Snapshot() {
@@ -650,7 +677,7 @@ func (s *Server) States() ServerStates {
 		ID:                s.id,
 		Endpoint:          s.Endpoint(),
 		Leader:            s.Leader(),
-		Role:              s.role(),
+		Role:              s.role().String(),
 		CurrentTerm:       s.currentTerm(),
 		LastLogIndex:      s.lastLogIndex(),
 		LastVoteTerm:      lastVoteSummary.term,

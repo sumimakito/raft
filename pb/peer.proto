@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+option go_package = "github.com/sumimakito/raft/pb";
+
+package pb;
+
+message Peer {
+  string id = 1;
+  string endpoint = 2;
+}

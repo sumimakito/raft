@@ -3,6 +3,8 @@ package raft
 import (
 	"sort"
 	"sync"
+
+	"github.com/sumimakito/raft/pb"
 )
 
 type replCtl struct {
@@ -12,7 +14,7 @@ type replCtl struct {
 
 type replState struct {
 	sched         *replScheduler
-	peer          Peer
+	peer          *pb.Peer
 	configuration *Configuration
 
 	nextIndex uint64
@@ -22,11 +24,11 @@ type replState struct {
 	stopped bool
 }
 
-func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse) {
+func (s *replState) replicate(ctl *replCtl, resCh chan<- *pb.AppendEntriesResponse) {
 	defer ctl.Release()
 
 	var requestID ObjectID
-	var request *AppendEntriesRequest
+	var request *pb.AppendEntriesRequest
 	var lastLogIndex uint64
 
 	s.sched.server.logger.Infow("replication/heartbeat started",
@@ -34,7 +36,7 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 	defer s.sched.server.logger.Infow("replication/heartbeat stopped",
 		logFields(s.sched.server, "replication_id", ctl.replID, "peer", s.peer)...)
 
-	if s.peer.ID == s.sched.server.id {
+	if s.peer.Id == s.sched.server.id {
 	SELF_CHECK_INDEX:
 		select {
 		case <-ctl.Cancelled():
@@ -44,11 +46,11 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 
 		lastLogIndex = s.sched.server.lastLogIndex()
 		// Check if there are more entries to replicate.
-		matchIndex, ok := s.sched.matchIndexes.Load(s.peer.ID)
+		matchIndex, ok := s.sched.matchIndexes.Load(s.peer.Id)
 		if !ok {
 			s.sched.server.logger.Panicw(
 				"confusing condition: missing an entry in matchIndexes",
-				logFields(s.sched.server, "missing_server_id", s.peer.ID)...,
+				logFields(s.sched.server, "missing_server_id", s.peer.Id)...,
 			)
 		}
 		if lastLogIndex <= matchIndex.(uint64) {
@@ -67,7 +69,7 @@ func (s *replState) replicate(ctl *replCtl, resCh chan<- *AppendEntriesResponse)
 		}
 
 		s.nextIndex = lastLogIndex + 1
-		s.sched.updateMatchIndex(s.peer.ID, lastLogIndex)
+		s.sched.updateMatchIndex(s.peer.Id, lastLogIndex)
 
 		s.sched.server.logger.Infow("self replication state updated",
 			logFields(s.sched.server, "replication_id", ctl.replID, "peer", s.peer)...)
@@ -162,7 +164,7 @@ REPLICATE:
 					"request_id", requestID,
 					"response", response)...)
 			s.nextIndex = lastLogIndex + 1
-			s.sched.updateMatchIndex(s.peer.ID, lastLogIndex)
+			s.sched.updateMatchIndex(s.peer.Id, lastLogIndex)
 		} else {
 			s.sched.server.logger.Debugw("unsuccessful replication repsonse",
 				logFields(s.sched.server,
@@ -184,7 +186,7 @@ REPLICATE:
 	}
 }
 
-func (s *replState) Replicate(replID string, resCh chan<- *AppendEntriesResponse) {
+func (s *replState) Replicate(replID string, resCh chan<- *pb.AppendEntriesResponse) {
 	s.ctlMu.Lock()
 	defer s.ctlMu.Unlock()
 
@@ -197,7 +199,7 @@ func (s *replState) Replicate(replID string, resCh chan<- *AppendEntriesResponse
 	s.ctl = newCtl
 	if oldCtl != nil {
 		oldCtl.Cancel()
-		oldCtl.WaitRelease()
+		<-oldCtl.WaitRelease()
 	}
 	go s.replicate(newCtl, resCh)
 }
@@ -212,7 +214,7 @@ func (s *replState) Stop() {
 
 	if s.ctl != nil {
 		s.ctl.Cancel()
-		s.ctl.WaitRelease()
+		<-s.ctl.WaitRelease()
 	}
 }
 
@@ -220,7 +222,7 @@ type replScheduler struct {
 	server *Server
 
 	statesMu sync.Mutex // protects states
-	states   map[ServerID]*replState
+	states   map[string]*replState
 
 	matchIndexes sync.Map // map[ServerID]uint64
 }
@@ -228,37 +230,37 @@ type replScheduler struct {
 func newReplScheduler(server *Server) *replScheduler {
 	return &replScheduler{
 		server: server,
-		states: map[ServerID]*replState{},
+		states: map[string]*replState{},
 	}
 }
 
-func (r *replScheduler) prepareHeartbeat() (ObjectID, *AppendEntriesRequest) {
-	return NewObjectID(), &AppendEntriesRequest{
+func (r *replScheduler) prepareHeartbeat() (ObjectID, *pb.AppendEntriesRequest) {
+	return NewObjectID(), &pb.AppendEntriesRequest{
 		Term:         r.server.currentTerm(),
-		LeaderID:     r.server.id,
+		LeaderId:     r.server.id,
 		LeaderCommit: r.server.commitIndex(),
 		PrevLogTerm:  0,
 		PrevLogIndex: 0,
-		Entries:      []*Log{},
+		Entries:      []*pb.Log{},
 	}
 }
 
-func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (ObjectID, *AppendEntriesRequest) {
+func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (ObjectID, *pb.AppendEntriesRequest) {
 	requestID := NewObjectID()
 
-	request := &AppendEntriesRequest{
+	request := &pb.AppendEntriesRequest{
 		Term:         r.server.currentTerm(),
-		LeaderID:     r.server.id,
+		LeaderId:     r.server.id,
 		LeaderCommit: r.server.commitIndex(),
 		PrevLogTerm:  0,
 		PrevLogIndex: 0,
-		Entries:      []*Log{},
+		Entries:      []*pb.Log{},
 	}
 
 	if prevLogIndex := firstIndex - 1; prevLogIndex > 0 {
 		log := r.server.logStore.Entry(prevLogIndex)
-		request.PrevLogTerm = log.Term
-		request.PrevLogIndex = log.Index
+		request.PrevLogTerm = log.Meta.Term
+		request.PrevLogIndex = log.Meta.Index
 	}
 
 	lastLogIndex := r.server.lastLogIndex()
@@ -266,24 +268,24 @@ func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (ObjectID, 
 		return requestID, request
 	}
 
-	request.Entries = make([]*Log, 0, lastLogIndex-firstIndex+1)
+	request.Entries = make([]*pb.Log, 0, lastLogIndex-firstIndex+1)
 	for i := firstIndex; i <= lastLogIndex; i++ {
-		request.Entries = append(request.Entries, r.server.logStore.Entry(i))
+		request.Entries = append(request.Entries, r.server.logStore.Entry(i).Copy())
 	}
 
 	return requestID, request
 }
 
-func (r *replScheduler) updateMatchIndex(serverID ServerID, matchIndex uint64) {
+func (r *replScheduler) updateMatchIndex(serverID string, matchIndex uint64) {
 	c := r.server.confStore.Latest()
 	r.matchIndexes.Store(serverID, matchIndex)
 	r.server.updateCommitIndex(r.nextCommitIndexLocked(c))
 }
 
 func (r *replScheduler) nextCommitIndexLocked(c *Configuration) uint64 {
-	matchIndexes := map[ServerID]uint64{}
+	matchIndexes := map[string]uint64{}
 	r.matchIndexes.Range(func(key, value any) bool {
-		matchIndexes[key.(ServerID)] = value.(uint64)
+		matchIndexes[key.(string)] = value.(uint64)
 		return true
 	})
 	r.server.logger.Info(matchIndexes)
@@ -291,45 +293,45 @@ func (r *replScheduler) nextCommitIndexLocked(c *Configuration) uint64 {
 	if !c.Joint() {
 		currentIndexes := make([]uint64, 0, len(c.Current.Peers))
 		for _, p := range c.Current.Peers {
-			if index, ok := matchIndexes[p.ID]; ok {
+			if index, ok := matchIndexes[p.Id]; ok {
 				currentIndexes = append(currentIndexes, index)
 			} else {
 				r.server.logger.Panicw(
 					"confusing condition: found a server ID that does not belong to current configuration",
-					logFields(r.server, "orphan_server_id", p.ID)...,
+					logFields(r.server, "orphan_server_id", p.Id)...,
 				)
 			}
 		}
 		sort.SliceStable(currentIndexes, func(i, j int) bool { return currentIndexes[i] < currentIndexes[j] })
-		commitIndex := currentIndexes[len(currentIndexes)-c.Current.Quorum()]
+		commitIndex := currentIndexes[len(currentIndexes)-c.CurrentConfig().Quorum()]
 		r.server.logger.Infow("next commit index", logFields(r.server, "next_commit_index", commitIndex)...)
 		return commitIndex
 	} else {
 		currentIndexes := make([]uint64, 0, len(c.Current.Peers))
 		nextIndexes := make([]uint64, 0, len(c.Next.Peers))
 		for _, p := range c.Peers() {
-			if c.Current.Contains(p.ID) {
-				if index, ok := matchIndexes[p.ID]; ok {
+			if c.CurrentConfig().Contains(p.Id) {
+				if index, ok := matchIndexes[p.Id]; ok {
 					currentIndexes = append(currentIndexes, index)
 				} else {
 					r.server.logger.Panicw(
 						"confusing condition: found a server ID that does not belong to current configuration",
-						logFields(r.server, "orphan_server_id", p.ID)...,
+						logFields(r.server, "orphan_server_id", p.Id)...,
 					)
 				}
-			} else if c.Next.Contains(p.ID) {
-				if index, ok := matchIndexes[p.ID]; ok {
+			} else if c.NextConfig().Contains(p.Id) {
+				if index, ok := matchIndexes[p.Id]; ok {
 					nextIndexes = append(nextIndexes, index)
 				} else {
 					r.server.logger.Panicw(
 						"confusing condition: found a server ID that does not belong to next configuration",
-						logFields(r.server, "orphan_server_id", p.ID)...,
+						logFields(r.server, "orphan_server_id", p.Id)...,
 					)
 				}
 			} else {
 				r.server.logger.Panicw(
 					"confusing condition: found a server ID that does not belong to both any configuration",
-					logFields(r.server, "orphan_server_id", p.ID)...,
+					logFields(r.server, "orphan_server_id", p.Id)...,
 				)
 			}
 		}
@@ -339,8 +341,8 @@ func (r *replScheduler) nextCommitIndexLocked(c *Configuration) uint64 {
 		sort.SliceStable(nextIndexes, func(i, j int) bool {
 			return nextIndexes[i] < nextIndexes[j]
 		})
-		commitIndex := currentIndexes[len(currentIndexes)-c.Current.Quorum()]
-		if index := currentIndexes[len(currentIndexes)-c.Current.Quorum()]; index < commitIndex {
+		commitIndex := currentIndexes[len(currentIndexes)-c.CurrentConfig().Quorum()]
+		if index := currentIndexes[len(currentIndexes)-c.CurrentConfig().Quorum()]; index < commitIndex {
 			commitIndex = index
 		}
 		r.server.logger.Infow("next commit index", logFields(r.server, "next_commit_index", commitIndex)...)
@@ -348,34 +350,34 @@ func (r *replScheduler) nextCommitIndexLocked(c *Configuration) uint64 {
 	}
 }
 
-func (r *replScheduler) Start() <-chan *AppendEntriesResponse {
+func (r *replScheduler) Start() <-chan *pb.AppendEntriesResponse {
 	c := r.server.confStore.Latest()
 
 	replID := NewObjectID().Hex()
 	r.server.logger.Infow("replication/heartbeat scheduled",
 		logFields(r.server, "replication_id", replID)...)
 
-	resCh := make(chan *AppendEntriesResponse, len(c.Peers())*2)
+	resCh := make(chan *pb.AppendEntriesResponse, len(c.Peers())*2)
 
 	r.statesMu.Lock()
-	r.states = map[ServerID]*replState{}
+	r.states = map[string]*replState{}
 	for _, p := range c.Peers() {
-		if p.ID == r.server.id {
-			r.states[p.ID] = &replState{
+		if p.Id == r.server.id {
+			r.states[p.Id] = &replState{
 				sched:         r,
 				peer:          p,
 				configuration: c,
 				nextIndex:     r.server.lastLogIndex() + 1,
 			}
-			r.matchIndexes.Store(p.ID, r.server.lastLogIndex())
+			r.matchIndexes.Store(p.Id, r.server.lastLogIndex())
 		} else {
-			r.states[p.ID] = &replState{
+			r.states[p.Id] = &replState{
 				sched:         r,
 				peer:          p,
 				configuration: c,
 				nextIndex:     r.server.lastLogIndex(),
 			}
-			r.matchIndexes.Store(p.ID, 0)
+			r.matchIndexes.Store(p.Id, 0)
 		}
 	}
 	for _, s := range r.states {
@@ -396,7 +398,7 @@ func (r *replScheduler) Stop() {
 	for _, s := range r.states {
 		go func(s *replState) { s.Stop(); w.Done() }(s)
 	}
-	r.states = map[ServerID]*replState{}
+	r.states = map[string]*replState{}
 	w.Wait()
 	r.server.logger.Infow("all replications stopped", logFields(r.server)...)
 }

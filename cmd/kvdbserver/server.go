@@ -4,13 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
+	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 
 	"github.com/sumimakito/raft"
-	"github.com/sumimakito/raft/msgpackrpc"
+	"github.com/sumimakito/raft/grpctrans"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -37,10 +37,13 @@ func main() {
 	}
 
 	var logLevelName string
+	var pprofAddr string
 	var snapshotDir string
 	var stableDir string
 	flag.StringVar(&logLevelName, "logLevel", "info",
 		"Specifies the logging level (available: debug, info, warn, error, dpanic, panic, fatal).")
+	flag.StringVar(&pprofAddr, "pprof", "",
+		"Address for pprof to listen on.")
 	flag.StringVar(&snapshotDir, "snapshotDir", filepath.Join(workDir, "snapshot"),
 		"Specifies the directory that snapshot files are kept in.")
 	flag.StringVar(&stableDir, "stableDir", filepath.Join(workDir, "stable"),
@@ -54,6 +57,15 @@ func main() {
 		fmt.Println("Options:")
 		flag.PrintDefaults()
 		os.Exit(0)
+	}
+
+	if pprofAddr != "" {
+		go func() {
+			log.Printf("pprof will listen on %s\n", pprofAddr)
+			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
+				log.Panic(err)
+			}
+		}()
 	}
 
 	logLevel, ok := logLevels[logLevelName]
@@ -78,16 +90,18 @@ func main() {
 	log.Printf("using %s as directory for snapshot files\n", snapshotDir)
 	log.Printf("using %s as directory for stable storage files\n", stableDir)
 
-	listener := raft.Must2(net.Listen("tcp", rpcServerAddr)).(net.Listener)
+	transport, err := grpctrans.NewTransport(rpcServerAddr)
+	if err != nil {
+		log.Panic(err)
+	}
 	kvdbAPIExt := NewAPIExtension(logger)
 	logStore := NewLogStore(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
 	kvsm := NewKVSM()
-	transport := msgpackrpc.NewTransport(listener)
 	snapshot := NewSnapshotStore(snapshotDir)
 
 	server := raft.NewServer(
 		raft.ServerCoreOptions{
-			ID:           raft.ServerID(serverID),
+			ID:           serverID,
 			Log:          logStore,
 			StateMachine: kvsm,
 			Snapshot:     snapshot,

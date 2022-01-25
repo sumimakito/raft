@@ -2,6 +2,8 @@ package raft
 
 import (
 	"context"
+
+	"github.com/sumimakito/raft/pb"
 )
 
 type RPC struct {
@@ -27,57 +29,6 @@ type RPCResponse struct {
 	Error    error
 }
 
-type AppendEntriesRequest struct {
-	Term         uint64   `json:"term" codec:"term"`
-	LeaderID     ServerID `json:"leader_id" codec:"leader_id"`
-	LeaderCommit uint64   `json:"leader_commit" codec:"leader_commit"`
-	PrevLogTerm  uint64   `json:"prev_log_term" codec:"prev_log_term"`
-	PrevLogIndex uint64   `json:"prev_log_index" codec:"prev_log_index"`
-	Entries      []*Log   `json:"entries" codec:"entries"`
-}
-
-type AppendEntriesResponse struct {
-	ServerID ServerID `json:"server_id" codec:"server_id"`
-	Term     uint64   `json:"term" codec:"term"`
-	Success  bool     `json:"success" codec:"success"`
-}
-
-type RequestVoteRequest struct {
-	Term         uint64   `json:"term" codec:"term"`
-	CandidateID  ServerID `json:"candidate_id" codec:"candidate_id"`
-	LastLogTerm  uint64   `json:"last_log_term" codec:"last_log_term"`
-	LastLogIndex uint64   `json:"last_log_index" codec:"last_log_index"`
-}
-
-type RequestVoteResponse struct {
-	ServerID    ServerID `json:"server_id" codec:"server_id"`
-	Term        uint64   `json:"term" codec:"term"`
-	VoteGranted bool     `json:"vote_granted" codec:"vote_granted"`
-}
-
-type InstallSnapshotRequest struct {
-	Term              uint64   `json:"term" codec:"term"`
-	LeaderID          ServerID `json:"leader_id" codec:"leader_id"`
-	LastIncludedIndex uint64   `json:"last_included_index" codec:"last_included_index"`
-	LastIncludedTerm  uint64   `json:"last_included_term" codec:"last_included_term"`
-	Offset            uint64   `json:"offset" codec:"offset"`
-	Data              []byte   `json:"data" codec:"data"`
-	Done              bool     `json:"done" codec:"done"`
-}
-
-type InstallSnapshotResponse struct {
-	Term uint64 `json:"term" codec:"term"`
-}
-
-type ApplyLogRequest struct {
-	Body LogBody `json:"body" codec:"body"`
-}
-
-type ApplyLogResponse struct {
-	Meta  *LogMeta `json:"meta" codec:"meta"`
-	Error error    `json:"error" codec:"error"`
-}
-
 type rpcHandler struct {
 	server *Server
 }
@@ -86,12 +37,14 @@ func newRPCHandler(server *Server) *rpcHandler {
 	return &rpcHandler{server: server}
 }
 
-func (h *rpcHandler) AppendEntries(ctx context.Context, requestID string, request *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+func (h *rpcHandler) AppendEntries(
+	ctx context.Context, requestID string, request *pb.AppendEntriesRequest,
+) (*pb.AppendEntriesResponse, error) {
 	h.server.logger.Debugw("incoming RPC: AppendEntries",
 		logFields(h.server, "request_id", requestID, "request", request)...)
 
-	response := &AppendEntriesResponse{
-		ServerID: h.server.id,
+	response := &pb.AppendEntriesResponse{
+		ServerId: h.server.id,
 		Term:     h.server.currentTerm(),
 		Success:  false,
 	}
@@ -101,15 +54,15 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, requestID string, reques
 		return response, nil
 	}
 
-	if h.server.Leader().ID != request.LeaderID {
-		leaderPeer := h.server.confStore.Latest().Peer(request.LeaderID)
+	if h.server.Leader().Id != request.LeaderId {
+		leaderPeer := h.server.confStore.Latest().Peer(request.LeaderId)
 		h.server.alterLeader(leaderPeer)
 	}
 
 	if request.Term > h.server.currentTerm() {
 		h.server.logger.Debugw("local term is stale", logFields(h.server, "request_id", requestID)...)
 		if h.server.role() != Follower {
-			leaderPeer := h.server.confStore.Latest().Peer(request.LeaderID)
+			leaderPeer := h.server.confStore.Latest().Peer(request.LeaderId)
 			h.server.stepdownFollower(leaderPeer)
 		}
 		h.server.alterTerm(request.Term)
@@ -118,7 +71,7 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, requestID string, reques
 
 	if request.PrevLogIndex > 0 {
 		requestPrevLog := h.server.logStore.Entry(request.PrevLogIndex)
-		if requestPrevLog == nil || request.PrevLogTerm != requestPrevLog.Term {
+		if requestPrevLog == nil || request.PrevLogTerm != requestPrevLog.Meta.Term {
 			h.server.logger.Infow("incoming previous log does not exist or has a different term",
 				logFields(h.server, "request_id", requestID, "request", request)...)
 			return response, nil
@@ -128,15 +81,15 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, requestID string, reques
 	if len(request.Entries) > 0 {
 		lastLogIndex := h.server.lastLogIndex()
 		firstAppendArrayIndex := 0
-		if request.Entries[0].Index <= lastLogIndex {
+		if request.Entries[0].Meta.Index <= lastLogIndex {
 			firstCleanUpIndex := uint64(0)
 			for i, e := range request.Entries {
-				if e.Index > lastLogIndex {
+				if e.Meta.Index > lastLogIndex {
 					break
 				}
-				log := h.server.logStore.Entry(e.Index)
-				if log.Term != e.Term {
-					firstCleanUpIndex = log.Index
+				log := h.server.logStore.Entry(e.Meta.Index)
+				if log.Meta.Term != e.Meta.Term {
+					firstCleanUpIndex = log.Meta.Index
 					break
 				}
 				firstAppendArrayIndex = i + 1
@@ -145,9 +98,9 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, requestID string, reques
 				h.server.logStore.DeleteAfter(firstCleanUpIndex)
 			}
 		}
-		bodies := make([]LogBody, 0, len(request.Entries)-firstAppendArrayIndex)
+		bodies := make([]*pb.LogBody, 0, len(request.Entries)-firstAppendArrayIndex)
 		for i := firstAppendArrayIndex; i < len(request.Entries); i++ {
-			bodies = append(bodies, request.Entries[i].LogBody)
+			bodies = append(bodies, request.Entries[i].Body.Copy())
 		}
 		h.server.appendLogs(bodies)
 	}
@@ -162,14 +115,16 @@ func (h *rpcHandler) AppendEntries(ctx context.Context, requestID string, reques
 	return response, nil
 }
 
-func (h *rpcHandler) RequestVote(ctx context.Context, requestID string, request *RequestVoteRequest) (*RequestVoteResponse, error) {
+func (h *rpcHandler) RequestVote(
+	ctx context.Context, requestID string, request *pb.RequestVoteRequest,
+) (*pb.RequestVoteResponse, error) {
 	h.server.logger.Infow("incoming RPC: RequestVote",
 		logFields(h.server, "request_id", requestID, "request", request)...)
 
-	response := &RequestVoteResponse{
-		ServerID:    h.server.id,
-		Term:        h.server.currentTerm(),
-		VoteGranted: false,
+	response := &pb.RequestVoteResponse{
+		ServerId: h.server.id,
+		Term:     h.server.currentTerm(),
+		Granted:  false,
 	}
 
 	if request.Term < h.server.currentTerm() {
@@ -183,8 +138,8 @@ func (h *rpcHandler) RequestVote(ctx context.Context, requestID string, request 
 		h.server.logger.Debugw("server has voted in this term",
 			logFields(h.server, "request_id", requestID, "candidate", lastVoteSummary.candidate)...)
 		// Check if the granted vote is for current candidate.
-		if lastVoteSummary.candidate == request.CandidateID {
-			response.VoteGranted = true
+		if lastVoteSummary.candidate == request.CandidateId {
+			response.Granted = true
 		}
 		return response, nil
 	}
@@ -211,31 +166,44 @@ func (h *rpcHandler) RequestVote(ctx context.Context, requestID string, request 
 		return response, nil
 	}
 
-	h.server.setLastVoteSummary(h.server.currentTerm(), request.CandidateID)
+	h.server.setLastVoteSummary(h.server.currentTerm(), request.CandidateId)
 
-	response.VoteGranted = true
+	response.Granted = true
 	return response, nil
 }
 
 func (h *rpcHandler) InstallSnapshot(
-	ctx context.Context, requestID string, request *InstallSnapshotRequest,
-) (*InstallSnapshotRequest, error) {
+	ctx context.Context, requestID string, request *pb.InstallSnapshotRequest,
+) (*pb.InstallSnapshotRequest, error) {
 	h.server.logger.Infow("incoming RPC: InstallSnapshot",
 		logFields(h.server, "request_id", requestID, "request", request)...)
+
+	return nil, nil
 }
 
-func (h *rpcHandler) ApplyLog(ctx context.Context, requestID string, request *ApplyLogRequest) (*ApplyLogResponse, error) {
+func (h *rpcHandler) ApplyLog(ctx context.Context, requestID string, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {
 	h.server.logger.Infow("incoming RPC: ApplyLog",
 		logFields(h.server, "request_id", requestID, "request", request)...)
 
 	if h.server.role() != Leader {
-		return &ApplyLogResponse{Error: ErrNonLeader}, nil
+		return &pb.ApplyLogResponse{
+			Response: &pb.ApplyLogResponse_Error{
+				Error: ErrNonLeader.Error(),
+			},
+		}, nil
 	}
 
 	result, err := h.server.Apply(ctx, request.Body).Result()
 	if err != nil {
-		return &ApplyLogResponse{Error: err}, nil
+		return &pb.ApplyLogResponse{
+			Response: &pb.ApplyLogResponse_Error{
+				Error: err.Error(),
+			},
+		}, nil
 	}
-	logMeta := result.(LogMeta)
-	return &ApplyLogResponse{Meta: &logMeta}, nil
+	return &pb.ApplyLogResponse{
+		Response: &pb.ApplyLogResponse_Meta{
+			Meta: result.Copy(),
+		},
+	}, nil
 }

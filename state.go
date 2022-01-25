@@ -24,7 +24,7 @@ func (r ServerRole) String() string {
 
 type voteSummary struct {
 	term      uint64
-	candidate ServerID
+	candidate string
 }
 
 // nilVoteSummary is equivalent to the "unvoted" state due to its zero term
@@ -78,7 +78,7 @@ func (s *Server) lastVoteSummary() voteSummary {
 	return nilVoteSummary
 }
 
-func (s *Server) setLastVoteSummary(term uint64, candidate ServerID) {
+func (s *Server) setLastVoteSummary(term uint64, candidate string) {
 	summary := voteSummary{term: term, candidate: candidate}
 	Must1(s.stable.SetLastVote(summary))
 	s.serverState.stateLastVoteSummary.Store(summary)

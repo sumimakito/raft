@@ -2,27 +2,29 @@ package raft
 
 import (
 	"context"
+
+	"github.com/sumimakito/raft/pb"
 )
 
 type Transport interface {
 	// Endpoint returns the endpoint used by current Transport instance
-	Endpoint() ServerEndpoint
+	Endpoint() string
 
-	AppendEntries(ctx context.Context, peer Peer, request *AppendEntriesRequest) (*AppendEntriesResponse, error)
-	RequestVote(ctx context.Context, peer Peer, request *RequestVoteRequest) (*RequestVoteResponse, error)
-	InstallSnapshot(ctx context.Context, peer Peer, request *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
-	ApplyLog(ctx context.Context, peer Peer, request *ApplyLogRequest) (*ApplyLogResponse, error)
+	AppendEntries(ctx context.Context, peer *pb.Peer, request *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error)
+	RequestVote(ctx context.Context, peer *pb.Peer, request *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error)
+	InstallSnapshot(ctx context.Context, peer *pb.Peer, request *pb.InstallSnapshotRequest) (*pb.InstallSnapshotResponse, error)
+	ApplyLog(ctx context.Context, peer *pb.Peer, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error)
 
 	RPC() <-chan *RPC
 
-	Serve()
+	Serve() error
 }
 
 // TransportConnecter is an optional interface for those implementations
 // that allow explicit connect and disconnect operations on a per peer basis.
 type TransportConnecter interface {
-	Connect(peer Peer) error
-	Disconnect(peer Peer)
+	Connect(peer *pb.Peer) error
+	Disconnect(peer *pb.Peer)
 	DisconnectAll()
 }
 

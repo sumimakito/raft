@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+import "log.proto";
+
+option go_package = "github.com/sumimakito/raft/pb";
+
+package pb;
+
+message AppendEntriesRequest {
+  uint64 term = 1;
+  string leader_id = 2;
+  uint64 leader_commit = 3;
+  uint64 prev_log_index = 4;
+  uint64 prev_log_term = 5;
+  repeated Log entries = 7;
+}
+
+message AppendEntriesResponse {
+  string server_id = 1;
+  uint64 term = 2;
+  bool success = 3;
+}
+
+message RequestVoteRequest {
+  uint64 term = 1;
+  string candidate_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
+}
+
+message RequestVoteResponse {
+  string server_id = 1;
+  uint64 term = 2;
+  bool granted = 3;
+}
+
+message InstallSnapshotRequest {
+  message Meta {
+    uint64 term = 1;
+    string leader_id = 2;
+    uint64 last_included_index = 3;
+    uint64 last_included_term = 4;
+  }
+  oneof request {
+    Meta meta = 1;
+    bytes data = 2;
+  }
+}
+
+message InstallSnapshotResponse { uint64 term = 1; }
+
+message ApplyLogRequest { LogBody body = 1; }
+
+message ApplyLogResponse {
+  oneof response {
+    LogMeta meta = 1;
+    string error = 2;
+  }
+}

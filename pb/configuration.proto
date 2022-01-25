@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+import "peer.proto";
+
+option go_package = "github.com/sumimakito/raft/pb";
+
+package pb;
+
+message Config { repeated Peer peers = 1; }
+
+message Configuration {
+  Config current = 1;
+  Config next = 2;
+}

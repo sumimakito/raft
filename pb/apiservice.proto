@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import "command.proto";
 import "log.proto";
+import "rpc.proto";
 
 option go_package = "github.com/sumimakito/raft/pb";
 
@@ -12,7 +13,3 @@ service APIService {
   rpc ApplyCommand(Command) returns (ApplyLogResponse);
 }
 
-message ApplyLogResponse {
-  LogMeta meta = 1;
-  string error = 2;
-}

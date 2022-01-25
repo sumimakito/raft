@@ -1,8 +1,7 @@
 package raft
 
-type Peer struct {
-	ID       ServerID       `json:"id"`
-	Endpoint ServerEndpoint `json:"endpoint"`
-}
+import (
+	"github.com/sumimakito/raft/pb"
+)
 
-var nilPeer = Peer{}
+var nilPeer = &pb.Peer{Id: "", Endpoint: ""}

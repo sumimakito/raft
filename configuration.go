@@ -3,33 +3,33 @@ package raft
 import (
 	"sync/atomic"
 
-	"github.com/ugorji/go/codec"
+	"github.com/sumimakito/raft/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 type Config struct {
-	peerMap SingleFlight
-	Peers   []Peer `json:"peers" codec:"peers"`
+	peerMap SingleFlight // map[string]Peer
+
+	*pb.Config
 }
 
-func newConfig(peers []Peer) *Config {
-	c := &Config{}
-	c.Peers = append(c.Peers, peers...)
-	return c
+func newConfig(pbConfig *pb.Config) *Config {
+	return &Config{Config: pbConfig.Copy()}
 }
 
 func (c *Config) Copy() *Config {
-	return newConfig(c.Peers)
+	return newConfig(c.Config.Copy())
 }
 
-func (c *Config) Contains(serverID ServerID) bool {
+func (c *Config) Contains(serverId string) bool {
 	peerMap := c.peerMap.Do(func() interface{} {
-		m := map[ServerID]Peer{}
+		m := map[string]*pb.Peer{}
 		for _, p := range c.Peers {
-			m[p.ID] = p
+			m[p.Id] = p
 		}
 		return m
-	}).(map[ServerID]Peer)
-	_, ok := peerMap[serverID]
+	}).(map[string]*pb.Peer)
+	_, ok := peerMap[serverId]
 	return ok
 }
 
@@ -40,102 +40,95 @@ func (c *Config) Quorum() int {
 type Configuration struct {
 	logIndex uint64
 
-	peerMapSF SingleFlight
-	peersSF   SingleFlight
+	peerMapSingle      SingleFlight
+	peersSingle        SingleFlight
+	currentPeersSingle SingleFlight
 
-	Current *Config `json:"current" codec:"current"` // cOld
-	Next    *Config `json:"next" codec:"next"`       // cNew
+	currentSingle SingleFlight
+	nextSingle    SingleFlight
+
+	*pb.Configuration
 }
 
-func (c *Configuration) peerMap() map[ServerID]Peer {
-	return c.peerMapSF.Do(func() interface{} {
-		m := map[ServerID]Peer{}
+func newConfiguration(pbConfiguration *pb.Configuration) *Configuration {
+	return &Configuration{Configuration: pbConfiguration}
+}
+
+func (c *Configuration) Copy() *Configuration {
+	return newConfiguration(c.Configuration.Copy())
+}
+
+func (c *Configuration) peerMap() map[string]*pb.Peer {
+	return c.peerMapSingle.Do(func() interface{} {
+		m := map[string]*pb.Peer{}
 		for i := range c.Current.Peers {
-			if _, ok := m[c.Current.Peers[i].ID]; ok {
+			if _, ok := m[c.Current.Peers[i].Id]; ok {
 				continue
 			}
-			m[c.Current.Peers[i].ID] = c.Current.Peers[i]
+			m[c.Current.Peers[i].Id] = c.Current.Peers[i]
 		}
 		if c.Next != nil {
 			for i := range c.Next.Peers {
-				if _, ok := m[c.Next.Peers[i].ID]; ok {
+				if _, ok := m[c.Next.Peers[i].Id]; ok {
 					continue
 				}
-				m[c.Next.Peers[i].ID] = c.Next.Peers[i]
+				m[c.Next.Peers[i].Id] = c.Next.Peers[i]
 			}
 		}
 		return m
-	}).(map[ServerID]Peer)
+	}).(map[string]*pb.Peer)
 }
 
-func (c *Configuration) peers() []Peer {
+func (c *Configuration) peers() []*pb.Peer {
 	if c.Next == nil || len(c.Next.Peers) == 0 {
-		// Fast path
-		return c.Current.Peers
+		return c.currentPeersSingle.Do(func() interface{} {
+			peers := make([]*pb.Peer, 0, len(c.Current.Peers))
+			for _, p := range c.Current.Peers {
+				peers = append(peers, p)
+			}
+			return peers
+		}).([]*pb.Peer)
 	}
 
 	peerMap := c.peerMap()
-	return c.peersSF.Do(func() interface{} {
-		peers := make([]Peer, 0, len(peerMap))
+	return c.peersSingle.Do(func() interface{} {
+		peers := make([]*pb.Peer, 0, len(peerMap))
 		for _, p := range peerMap {
 			peers = append(peers, p)
 		}
 		return peers
-	}).([]Peer)
+	}).([]*pb.Peer)
 }
 
-func (c *Configuration) Copy() *Configuration {
-	out := &Configuration{Current: c.Current.Copy()}
-	if out.Next != nil {
-		out.Next = c.Next.Copy()
+func (c *Configuration) CurrentConfig() *Config {
+	return c.currentSingle.Do(func() interface{} { return newConfig(c.Current) }).(*Config)
+}
+
+func (c *Configuration) NextConfig() *Config {
+	if c.Next == nil {
+		return nil
 	}
-	return out
-}
-
-func (c *Configuration) CopyInitiateTransition(next *Config) *Configuration {
-	return &Configuration{Current: c.Current.Copy(), Next: next.Copy()}
-}
-
-func (c *Configuration) CopyCommitTransition() *Configuration {
-	return &Configuration{Current: c.Next.Copy()}
-}
-
-func (c *Configuration) Encode() (out []byte) {
-	codec.NewEncoderBytes(&out, &codec.MsgpackHandle{}).MustEncode(*c)
-	return
-}
-
-func (c *Configuration) Decode(in []byte) {
-	codec.NewDecoderBytes(in, &codec.MsgpackHandle{}).MustDecode(c)
+	return c.nextSingle.Do(func() interface{} { return newConfig(c.Next) }).(*Config)
 }
 
 func (c *Configuration) Joint() bool {
 	return c.Next != nil
 }
 
-func (c *Configuration) CurrentPeers() []Peer {
-	return c.Current.Peers
-}
-
-func (c *Configuration) NextPeers() []Peer {
-	if c.Next != nil {
-		return c.Next.Peers
+func (c *Configuration) Peer(serverId string) *pb.Peer {
+	if p, ok := c.peerMap()[serverId]; ok {
+		return p
 	}
 	return nil
 }
 
-func (c *Configuration) Peer(serverID ServerID) Peer {
-	if p, ok := c.peerMap()[serverID]; ok {
-		return p
-	}
-	return nilPeer
-}
-
-func (c *Configuration) Peers() []Peer {
+func (c *Configuration) Peers() []*pb.Peer {
 	return c.peers()
 }
 
-var nilConfiguration = &Configuration{Current: newConfig(nil)}
+var nilConfiguration = newConfiguration(
+	&pb.Configuration{Current: &pb.Config{Peers: []*pb.Peer{}}},
+)
 
 type configurationStore struct {
 	server *Server
@@ -149,11 +142,10 @@ func newConfigurationStore(server *Server) (c configurationStore) {
 	// Find the latest configuration
 	if finder, ok := server.logStore.(LogStoreTypedFinder); ok {
 		// Fast path
-		if log := finder.LastTypedEntry(LogConfiguration); log != nil {
-			var latest Configuration
-			latest.Decode(log.Data)
-			latest.logIndex = log.Index
-			c.latest.Store(latest)
+		if log := finder.LastTypedEntry(pb.LogType_CONFIGURATION); log != nil {
+			var conf pb.Configuration
+			Must1(proto.Unmarshal(log.Body.Data, &conf))
+			c.latest.Store(&Configuration{logIndex: log.Meta.Index, Configuration: &conf})
 		}
 	} else {
 		// Slow path
@@ -162,11 +154,10 @@ func newConfigurationStore(server *Server) (c configurationStore) {
 			if log == nil {
 				server.logger.Panicw("one or more log gaps are detected", logFields(server, "missing_index", i)...)
 			}
-			if log.Type == LogConfiguration {
-				var latest Configuration
-				latest.Decode(log.Data)
-				latest.logIndex = log.Index
-				c.latest.Store(latest)
+			if log.Body.Type == pb.LogType_CONFIGURATION {
+				var conf pb.Configuration
+				Must1(proto.Unmarshal(log.Body.Data, &conf))
+				c.latest.Store(&Configuration{logIndex: log.Meta.Index, Configuration: &conf})
 				break
 			}
 		}
@@ -176,7 +167,9 @@ func newConfigurationStore(server *Server) (c configurationStore) {
 }
 
 func (s *configurationStore) ArbitraryAppend(c *Configuration) {
-	s.server.appendLogs([]LogBody{{Type: LogConfiguration, Data: c.Encode()}})
+	s.server.appendLogs([]*pb.LogBody{
+		{Type: pb.LogType_CONFIGURATION, Data: Must2(proto.Marshal(c.Configuration)).([]byte)},
+	})
 }
 
 // InitiateTransition creates a configuration for joint consensus that combines
@@ -189,8 +182,11 @@ func (s *configurationStore) InitiateTransition(next *Config) error {
 	if latest.Joint() {
 		return ErrInJointConsensus
 	}
-	c := latest.CopyInitiateTransition(next)
-	s.server.applyLogCh <- newFutureTask[any, any](LogBody{Type: LogConfiguration, Data: c.Encode()})
+	c := latest.CopyInitiateTransition(next.Config)
+	s.server.applyLogCh <- newFutureTask[*pb.LogMeta](&pb.LogBody{
+		Type: pb.LogType_CONFIGURATION,
+		Data: Must2(proto.Marshal(c)).([]byte),
+	})
 	s.server.logger.Infow("a configuration transition has been initiated",
 		logFields(s.server, "configuration", c)...)
 	return nil
@@ -205,7 +201,10 @@ func (s *configurationStore) CommitTransition() error {
 		return ErrNotInJointConsensus
 	}
 	c := latest.CopyCommitTransition()
-	s.server.applyLogCh <- newFutureTask[any, any](LogBody{Type: LogConfiguration, Data: c.Encode()})
+	s.server.applyLogCh <- newFutureTask[*pb.LogMeta](&pb.LogBody{
+		Type: pb.LogType_CONFIGURATION,
+		Data: Must2(proto.Marshal(c)).([]byte),
+	})
 	s.server.logger.Infow("a configuration transition has been committed",
 		logFields(s.server, "configuration", c)...)
 	return nil
@@ -216,5 +215,8 @@ func (s *configurationStore) Latest() *Configuration {
 }
 
 func (s *configurationStore) SetLatest(c *Configuration) {
+	if c == nil {
+		c = nilConfiguration
+	}
 	s.latest.Store(c)
 }

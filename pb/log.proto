@@ -5,9 +5,9 @@ option go_package = "github.com/sumimakito/raft/pb";
 package pb;
 
 enum LogType {
-  LOG_UNKNOWN = 0;
-  LOG_COMMAND = 1;
-  LOG_CONFIGURATION = 2;
+  UNKNOWN = 0;
+  COMMAND = 1;
+  CONFIGURATION = 2;
 }
 
 message LogMeta {
