@@ -8,26 +8,33 @@ import (
 )
 
 type RPC struct {
+	ctx        context.Context
 	requestID  string
-	Request    interface{}
-	responseCh chan *RPCResponse
+	futureTask FutureTask[any, any]
 }
 
-func NewRPC(request interface{}) *RPC {
-	return &RPC{requestID: NewObjectID().Hex(), Request: request, responseCh: make(chan *RPCResponse, 1)}
+func NewRPC(ctx context.Context, request interface{}) *RPC {
+	return &RPC{
+		ctx:        ctx,
+		requestID:  NewObjectID().Hex(),
+		futureTask: newFutureTask[any](request),
+	}
 }
 
-func (rpc *RPC) respond(response interface{}, err error) {
-	rpc.responseCh <- &RPCResponse{Response: response, Error: err}
+func (r *RPC) Context() context.Context {
+	return r.ctx
 }
 
-func (rpc *RPC) Response() <-chan *RPCResponse {
-	return rpc.responseCh
+func (r *RPC) Request() interface{} {
+	return r.futureTask.Task()
 }
 
-type RPCResponse struct {
-	Response interface{}
-	Error    error
+func (r *RPC) Respond(response interface{}, err error) {
+	r.futureTask.setResult(response, err)
+}
+
+func (r *RPC) Response() (interface{}, error) {
+	return r.futureTask.Result()
 }
 
 type InstallSnapshotRequest struct {
