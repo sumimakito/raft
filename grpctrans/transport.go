@@ -29,6 +29,7 @@ func (s *grpcService) AppendEntries(ctx context.Context, request *pb.AppendEntri
 	}
 	return response.Response.(*pb.AppendEntriesResponse), nil
 }
+
 func (s *grpcService) RequestVote(ctx context.Context, request *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error) {
 	r := raft.NewRPC(request)
 	s.rpcCh <- r
@@ -38,6 +39,7 @@ func (s *grpcService) RequestVote(ctx context.Context, request *pb.RequestVoteRe
 	}
 	return response.Response.(*pb.RequestVoteResponse), nil
 }
+
 func (s *grpcService) InstallSnapshot(ctx context.Context, request *pb.InstallSnapshotRequest) (*pb.InstallSnapshotResponse, error) {
 	r := raft.NewRPC(request)
 	s.rpcCh <- r
@@ -47,6 +49,7 @@ func (s *grpcService) InstallSnapshot(ctx context.Context, request *pb.InstallSn
 	}
 	return response.Response.(*pb.InstallSnapshotResponse), nil
 }
+
 func (s *grpcService) ApplyLog(ctx context.Context, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {
 	r := raft.NewRPC(request)
 	s.rpcCh <- r
