@@ -26,7 +26,7 @@ type stateMachineAdapter struct {
 
 	lastSnapshotIndex uint64
 	lastSnapshotTerm  uint64
-	lastSnapshotID    string
+	lastSnapshotId    string
 }
 
 func newStateMachineAdapter(server *Server, stateMachine StateMachine) *stateMachineAdapter {
@@ -44,17 +44,17 @@ func (a *stateMachineAdapter) Apply(index, term uint64, command Command) {
 // Snapshot takes a snapshot of the underlying StateMachine and returns the id of
 // the newly taken snapshot.
 // Unsafe for concurrent use.
-func (a *stateMachineAdapter) Snapshot() (spanshotID string, err error) {
+func (a *stateMachineAdapter) Snapshot() (spanshotId string, err error) {
 	c := a.server.confStore.Latest()
 	if c.Joint() {
 		a.server.logger.Debugw("snapshot skipped due to joint consensus", logFields(a.server)...)
-		return a.lastSnapshotID, nil
+		return a.lastSnapshotId, nil
 	}
 	snapshot := a.stateMachine.Snapshot()
 	index, term := a.lastIndex, a.lastTerm
 	if index == a.lastSnapshotIndex && term == a.lastSnapshotTerm {
 		a.server.logger.Debugw("snapshot skipped", logFields(a.server)...)
-		return a.lastSnapshotID, nil
+		return a.lastSnapshotId, nil
 	}
 	sink, err := a.server.snapshot.Create(index, term, c.Configuration)
 	if err != nil {
@@ -75,7 +75,7 @@ func (a *stateMachineAdapter) Snapshot() (spanshotID string, err error) {
 	if err := sink.Close(); err != nil {
 		return "", err
 	}
-	a.lastSnapshotIndex, a.lastSnapshotTerm, a.lastSnapshotID = index, term, snapshotId
+	a.lastSnapshotIndex, a.lastSnapshotTerm, a.lastSnapshotId = index, term, snapshotId
 	a.server.logger.Infow("snapshot has been taken",
 		logFields(a.server,
 			zap.String("snapshot_id", snapshotId),
