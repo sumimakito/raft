@@ -68,6 +68,10 @@ func (m *SnapshotMeta) SetCRC64(crc64 uint64) {
 	m.metadata.Crc64 = crc64
 }
 
+func (m *SnapshotMeta) Encode() ([]byte, error) {
+	return proto.Marshal(m.metadata)
+}
+
 type SnapshotSink struct {
 	wipDir   string
 	finalDir string

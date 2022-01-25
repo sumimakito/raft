@@ -185,18 +185,22 @@ func (h *rpcHandler) RequestVote(
 	return response, nil
 }
 
+// TODO: Should respond to shutdown signal since it may take longer than expected
+// to complete the installation.
 func (h *rpcHandler) InstallSnapshot(
 	ctx context.Context, requestID string, request *InstallSnapshotRequest,
 ) (*pb.InstallSnapshotResponse, error) {
+	defer request.Reader.Close()
+
 	h.server.logger.Infow("incoming RPC: InstallSnapshot",
 		logFields(h.server, "request_id", requestID, "request", request)...)
 
-	snapshotMetadata, err := h.server.snapshot.DecodeMeta(request.Metadata.SnapshotMetadata)
+	snapshotMeta, err := h.server.snapshot.DecodeMeta(request.Metadata.SnapshotMetadata)
 	if err != nil {
 		return nil, err
 	}
 
-	sink, err := h.server.snapshot.Create(snapshotMetadata.Index(), snapshotMetadata.Term(), snapshotMetadata.Configuration())
+	sink, err := h.server.snapshot.Create(snapshotMeta.Index(), snapshotMeta.Term(), snapshotMeta.Configuration())
 	if err != nil {
 		return nil, err
 	}
@@ -208,13 +212,17 @@ func (h *rpcHandler) InstallSnapshot(
 			break
 		}
 		if err != nil {
+			sink.Cancel()
 			return nil, err
 		}
 		if _, err := sink.Write(chunk[:n]); err != nil {
+			sink.Cancel()
 			return nil, err
 		}
 	}
-	request.Reader.Close()
+	if err := sink.Close(); err != nil {
+		return nil, err
+	}
 
 	return &pb.InstallSnapshotResponse{Term: h.server.currentTerm()}, nil
 }

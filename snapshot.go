@@ -18,6 +18,7 @@ type SnapshotMeta interface {
 	Index() uint64
 	Term() uint64
 	Configuration() *pb.Configuration
+	Encode() ([]byte, error)
 }
 
 type SnapshotSink interface {

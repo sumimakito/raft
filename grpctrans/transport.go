@@ -1,7 +1,6 @@
 package grpctrans
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -26,23 +25,23 @@ type grpcService struct {
 }
 
 func (s *grpcService) AppendEntries(ctx context.Context, request *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error) {
-	r := raft.NewRPC(request)
+	r := raft.NewRPC(ctx, request)
 	s.rpcCh <- r
-	response := <-r.Response()
-	if response.Error != nil {
-		return nil, response.Error
+	response, err := r.Response()
+	if err != nil {
+		return nil, err
 	}
-	return response.Response.(*pb.AppendEntriesResponse), nil
+	return response.(*pb.AppendEntriesResponse), nil
 }
 
 func (s *grpcService) RequestVote(ctx context.Context, request *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error) {
-	r := raft.NewRPC(request)
+	r := raft.NewRPC(ctx, request)
 	s.rpcCh <- r
-	response := <-r.Response()
-	if response.Error != nil {
-		return nil, response.Error
+	response, err := r.Response()
+	if err != nil {
+		return nil, err
 	}
-	return response.Response.(*pb.RequestVoteResponse), nil
+	return response.(*pb.RequestVoteResponse), nil
 }
 
 func (s *grpcService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer) error {
@@ -65,45 +64,47 @@ func (s *grpcService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer)
 		return err
 	}
 
-	request := raft.InstallSnapshotRequest{
+	pipeReader, pipeWriter := io.Pipe()
+	writer := raft.NewBufferedWriteCloser(pipeWriter)
+
+	request := &raft.InstallSnapshotRequest{
 		Metadata: &requestMeta,
+		Reader:   raft.NewBufferedReadCloser(pipeReader),
 	}
 
-	pipeReader, pipeWriter := io.Pipe()
-	writer := bufio.NewWriter(pipeWriter)
-	request.Reader = raft.NewBufferedReadCloser(pipeReader)
-
-	r := raft.NewRPC(request)
+	r := raft.NewRPC(stream.Context(), request)
 	s.rpcCh <- r
 
 	for {
-		r, err := stream.Recv()
+		requestData, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return err
 		}
-		writer.Write(r.Data)
+		if _, err := writer.Write(requestData.Data); err != nil {
+			return err
+		}
 	}
-	pipeWriter.Close()
+	writer.Flush()
+	writer.Close()
 
-	response := <-r.Response()
-
-	if response.Error != nil {
-		return response.Error
+	response, err := r.Response()
+	if err != nil {
+		return err
 	}
-	return stream.SendAndClose(response.Response.(*pb.InstallSnapshotResponse))
+	return stream.SendAndClose(response.(*pb.InstallSnapshotResponse))
 }
 
 func (s *grpcService) ApplyLog(ctx context.Context, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {
-	r := raft.NewRPC(request)
+	r := raft.NewRPC(ctx, request)
 	s.rpcCh <- r
-	response := <-r.Response()
-	if response.Error != nil {
-		return nil, response.Error
+	response, err := r.Response()
+	if err != nil {
+		return nil, err
 	}
-	return response.Response.(*pb.ApplyLogResponse), nil
+	return response.(*pb.ApplyLogResponse), nil
 }
 
 type rpcClient struct {
@@ -260,7 +261,7 @@ func (t *Transport) InstallSnapshot(
 		if err != nil {
 			return err
 		}
-		chunk := make([]byte, 1024)
+		chunk := make([]byte, 0, 1024)
 		for {
 			n, err := reader.Read(chunk)
 			if err == io.EOF {
