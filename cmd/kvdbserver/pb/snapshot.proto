@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+import "configuration.proto";
+
+option go_package = "github.com/sumimakito/raft/cmd/kvdbserver/pb";
+
+package pb;
+
+message SnapshotMeta {
+  string id = 1;
+  uint64 term = 2;
+  uint64 index = 3;
+  Configuration configuration = 4;
+  uint64 size = 5;
+  uint64 crc64 = 6;
+}

@@ -304,19 +304,20 @@ func (x *RequestVoteResponse) GetGranted() bool {
 	return false
 }
 
-type InstallSnapshotRequest struct {
+type InstallSnapshotRequestMeta struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	// Types that are assignable to Request:
-	//	*InstallSnapshotRequest_Meta_
-	//	*InstallSnapshotRequest_Data
-	Request isInstallSnapshotRequest_Request `protobuf_oneof:"request"`
+	Term              uint64 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
+	LeaderId          string `protobuf:"bytes,2,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
+	LastIncludedIndex uint64 `protobuf:"varint,3,opt,name=last_included_index,json=lastIncludedIndex,proto3" json:"last_included_index,omitempty"`
+	LastIncludedTerm  uint64 `protobuf:"varint,4,opt,name=last_included_term,json=lastIncludedTerm,proto3" json:"last_included_term,omitempty"`
+	SnapshotMetadata  []byte `protobuf:"bytes,5,opt,name=snapshot_metadata,json=snapshotMetadata,proto3" json:"snapshot_metadata,omitempty"`
 }
 
-func (x *InstallSnapshotRequest) Reset() {
-	*x = InstallSnapshotRequest{}
+func (x *InstallSnapshotRequestMeta) Reset() {
+	*x = InstallSnapshotRequestMeta{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_rpc_proto_msgTypes[4]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -324,13 +325,13 @@ func (x *InstallSnapshotRequest) Reset() {
 	}
 }
 
-func (x *InstallSnapshotRequest) String() string {
+func (x *InstallSnapshotRequestMeta) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*InstallSnapshotRequest) ProtoMessage() {}
+func (*InstallSnapshotRequestMeta) ProtoMessage() {}
 
-func (x *InstallSnapshotRequest) ProtoReflect() protoreflect.Message {
+func (x *InstallSnapshotRequestMeta) ProtoReflect() protoreflect.Message {
 	mi := &file_rpc_proto_msgTypes[4]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -342,47 +343,92 @@ func (x *InstallSnapshotRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use InstallSnapshotRequest.ProtoReflect.Descriptor instead.
-func (*InstallSnapshotRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use InstallSnapshotRequestMeta.ProtoReflect.Descriptor instead.
+func (*InstallSnapshotRequestMeta) Descriptor() ([]byte, []int) {
 	return file_rpc_proto_rawDescGZIP(), []int{4}
 }
 
-func (m *InstallSnapshotRequest) GetRequest() isInstallSnapshotRequest_Request {
-	if m != nil {
-		return m.Request
+func (x *InstallSnapshotRequestMeta) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *InstallSnapshotRequestMeta) GetLeaderId() string {
+	if x != nil {
+		return x.LeaderId
+	}
+	return ""
+}
+
+func (x *InstallSnapshotRequestMeta) GetLastIncludedIndex() uint64 {
+	if x != nil {
+		return x.LastIncludedIndex
+	}
+	return 0
+}
+
+func (x *InstallSnapshotRequestMeta) GetLastIncludedTerm() uint64 {
+	if x != nil {
+		return x.LastIncludedTerm
+	}
+	return 0
+}
+
+func (x *InstallSnapshotRequestMeta) GetSnapshotMetadata() []byte {
+	if x != nil {
+		return x.SnapshotMetadata
 	}
 	return nil
 }
 
-func (x *InstallSnapshotRequest) GetMeta() *InstallSnapshotRequest_Meta {
-	if x, ok := x.GetRequest().(*InstallSnapshotRequest_Meta_); ok {
-		return x.Meta
-	}
-	return nil
+type InstallSnapshotRequestData struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Data []byte `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
 }
 
-func (x *InstallSnapshotRequest) GetData() []byte {
-	if x, ok := x.GetRequest().(*InstallSnapshotRequest_Data); ok {
+func (x *InstallSnapshotRequestData) Reset() {
+	*x = InstallSnapshotRequestData{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rpc_proto_msgTypes[5]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *InstallSnapshotRequestData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstallSnapshotRequestData) ProtoMessage() {}
+
+func (x *InstallSnapshotRequestData) ProtoReflect() protoreflect.Message {
+	mi := &file_rpc_proto_msgTypes[5]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstallSnapshotRequestData.ProtoReflect.Descriptor instead.
+func (*InstallSnapshotRequestData) Descriptor() ([]byte, []int) {
+	return file_rpc_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *InstallSnapshotRequestData) GetData() []byte {
+	if x != nil {
 		return x.Data
 	}
 	return nil
 }
-
-type isInstallSnapshotRequest_Request interface {
-	isInstallSnapshotRequest_Request()
-}
-
-type InstallSnapshotRequest_Meta_ struct {
-	Meta *InstallSnapshotRequest_Meta `protobuf:"bytes,1,opt,name=meta,proto3,oneof"`
-}
-
-type InstallSnapshotRequest_Data struct {
-	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"`
-}
-
-func (*InstallSnapshotRequest_Meta_) isInstallSnapshotRequest_Request() {}
-
-func (*InstallSnapshotRequest_Data) isInstallSnapshotRequest_Request() {}
 
 type InstallSnapshotResponse struct {
 	state         protoimpl.MessageState
@@ -395,7 +441,7 @@ type InstallSnapshotResponse struct {
 func (x *InstallSnapshotResponse) Reset() {
 	*x = InstallSnapshotResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_rpc_proto_msgTypes[5]
+		mi := &file_rpc_proto_msgTypes[6]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -408,7 +454,7 @@ func (x *InstallSnapshotResponse) String() string {
 func (*InstallSnapshotResponse) ProtoMessage() {}
 
 func (x *InstallSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_proto_msgTypes[5]
+	mi := &file_rpc_proto_msgTypes[6]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -421,7 +467,7 @@ func (x *InstallSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*InstallSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_rpc_proto_rawDescGZIP(), []int{5}
+	return file_rpc_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *InstallSnapshotResponse) GetTerm() uint64 {
@@ -442,7 +488,7 @@ type ApplyLogRequest struct {
 func (x *ApplyLogRequest) Reset() {
 	*x = ApplyLogRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_rpc_proto_msgTypes[6]
+		mi := &file_rpc_proto_msgTypes[7]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -455,7 +501,7 @@ func (x *ApplyLogRequest) String() string {
 func (*ApplyLogRequest) ProtoMessage() {}
 
 func (x *ApplyLogRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_proto_msgTypes[6]
+	mi := &file_rpc_proto_msgTypes[7]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -468,7 +514,7 @@ func (x *ApplyLogRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyLogRequest.ProtoReflect.Descriptor instead.
 func (*ApplyLogRequest) Descriptor() ([]byte, []int) {
-	return file_rpc_proto_rawDescGZIP(), []int{6}
+	return file_rpc_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ApplyLogRequest) GetBody() *LogBody {
@@ -492,7 +538,7 @@ type ApplyLogResponse struct {
 func (x *ApplyLogResponse) Reset() {
 	*x = ApplyLogResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_rpc_proto_msgTypes[7]
+		mi := &file_rpc_proto_msgTypes[8]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -505,7 +551,7 @@ func (x *ApplyLogResponse) String() string {
 func (*ApplyLogResponse) ProtoMessage() {}
 
 func (x *ApplyLogResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_proto_msgTypes[7]
+	mi := &file_rpc_proto_msgTypes[8]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -518,7 +564,7 @@ func (x *ApplyLogResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyLogResponse.ProtoReflect.Descriptor instead.
 func (*ApplyLogResponse) Descriptor() ([]byte, []int) {
-	return file_rpc_proto_rawDescGZIP(), []int{7}
+	return file_rpc_proto_rawDescGZIP(), []int{8}
 }
 
 func (m *ApplyLogResponse) GetResponse() isApplyLogResponse_Response {
@@ -557,77 +603,6 @@ type ApplyLogResponse_Error struct {
 func (*ApplyLogResponse_Meta) isApplyLogResponse_Response() {}
 
 func (*ApplyLogResponse_Error) isApplyLogResponse_Response() {}
-
-type InstallSnapshotRequest_Meta struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	Term              uint64 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	LeaderId          string `protobuf:"bytes,2,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
-	LastIncludedIndex uint64 `protobuf:"varint,3,opt,name=last_included_index,json=lastIncludedIndex,proto3" json:"last_included_index,omitempty"`
-	LastIncludedTerm  uint64 `protobuf:"varint,4,opt,name=last_included_term,json=lastIncludedTerm,proto3" json:"last_included_term,omitempty"`
-}
-
-func (x *InstallSnapshotRequest_Meta) Reset() {
-	*x = InstallSnapshotRequest_Meta{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_rpc_proto_msgTypes[8]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *InstallSnapshotRequest_Meta) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*InstallSnapshotRequest_Meta) ProtoMessage() {}
-
-func (x *InstallSnapshotRequest_Meta) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_proto_msgTypes[8]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use InstallSnapshotRequest_Meta.ProtoReflect.Descriptor instead.
-func (*InstallSnapshotRequest_Meta) Descriptor() ([]byte, []int) {
-	return file_rpc_proto_rawDescGZIP(), []int{4, 0}
-}
-
-func (x *InstallSnapshotRequest_Meta) GetTerm() uint64 {
-	if x != nil {
-		return x.Term
-	}
-	return 0
-}
-
-func (x *InstallSnapshotRequest_Meta) GetLeaderId() string {
-	if x != nil {
-		return x.LeaderId
-	}
-	return ""
-}
-
-func (x *InstallSnapshotRequest_Meta) GetLastIncludedIndex() uint64 {
-	if x != nil {
-		return x.LastIncludedIndex
-	}
-	return 0
-}
-
-func (x *InstallSnapshotRequest_Meta) GetLastIncludedTerm() uint64 {
-	if x != nil {
-		return x.LastIncludedTerm
-	}
-	return 0
-}
 
 var File_rpc_proto protoreflect.FileDescriptor
 
@@ -669,38 +644,38 @@ var file_rpc_proto_rawDesc = []byte{
 	0x72, 0x76, 0x65, 0x72, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x74, 0x65, 0x72, 0x6d, 0x18, 0x02,
 	0x20, 0x01, 0x28, 0x04, 0x52, 0x04, 0x74, 0x65, 0x72, 0x6d, 0x12, 0x18, 0x0a, 0x07, 0x67, 0x72,
 	0x61, 0x6e, 0x74, 0x65, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x08, 0x52, 0x07, 0x67, 0x72, 0x61,
-	0x6e, 0x74, 0x65, 0x64, 0x22, 0x88, 0x02, 0x0a, 0x16, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c,
-	0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12,
-	0x35, 0x0a, 0x04, 0x6d, 0x65, 0x74, 0x61, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1f, 0x2e,
-	0x70, 0x62, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
-	0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x2e, 0x4d, 0x65, 0x74, 0x61, 0x48, 0x00,
-	0x52, 0x04, 0x6d, 0x65, 0x74, 0x61, 0x12, 0x14, 0x0a, 0x04, 0x64, 0x61, 0x74, 0x61, 0x18, 0x02,
-	0x20, 0x01, 0x28, 0x0c, 0x48, 0x00, 0x52, 0x04, 0x64, 0x61, 0x74, 0x61, 0x1a, 0x95, 0x01, 0x0a,
-	0x04, 0x4d, 0x65, 0x74, 0x61, 0x12, 0x12, 0x0a, 0x04, 0x74, 0x65, 0x72, 0x6d, 0x18, 0x01, 0x20,
-	0x01, 0x28, 0x04, 0x52, 0x04, 0x74, 0x65, 0x72, 0x6d, 0x12, 0x1b, 0x0a, 0x09, 0x6c, 0x65, 0x61,
-	0x64, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6c, 0x65,
-	0x61, 0x64, 0x65, 0x72, 0x49, 0x64, 0x12, 0x2e, 0x0a, 0x13, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x69,
-	0x6e, 0x63, 0x6c, 0x75, 0x64, 0x65, 0x64, 0x5f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x18, 0x03, 0x20,
-	0x01, 0x28, 0x04, 0x52, 0x11, 0x6c, 0x61, 0x73, 0x74, 0x49, 0x6e, 0x63, 0x6c, 0x75, 0x64, 0x65,
-	0x64, 0x49, 0x6e, 0x64, 0x65, 0x78, 0x12, 0x2c, 0x0a, 0x12, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x69,
-	0x6e, 0x63, 0x6c, 0x75, 0x64, 0x65, 0x64, 0x5f, 0x74, 0x65, 0x72, 0x6d, 0x18, 0x04, 0x20, 0x01,
-	0x28, 0x04, 0x52, 0x10, 0x6c, 0x61, 0x73, 0x74, 0x49, 0x6e, 0x63, 0x6c, 0x75, 0x64, 0x65, 0x64,
-	0x54, 0x65, 0x72, 0x6d, 0x42, 0x09, 0x0a, 0x07, 0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22,
-	0x2d, 0x0a, 0x17, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
-	0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x12, 0x0a, 0x04, 0x74, 0x65,
-	0x72, 0x6d, 0x18, 0x01, 0x20, 0x01, 0x28, 0x04, 0x52, 0x04, 0x74, 0x65, 0x72, 0x6d, 0x22, 0x32,
-	0x0a, 0x0f, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x4c, 0x6f, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
-	0x74, 0x12, 0x1f, 0x0a, 0x04, 0x62, 0x6f, 0x64, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32,
-	0x0b, 0x2e, 0x70, 0x62, 0x2e, 0x4c, 0x6f, 0x67, 0x42, 0x6f, 0x64, 0x79, 0x52, 0x04, 0x62, 0x6f,
-	0x64, 0x79, 0x22, 0x59, 0x0a, 0x10, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x4c, 0x6f, 0x67, 0x52, 0x65,
-	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x21, 0x0a, 0x04, 0x6d, 0x65, 0x74, 0x61, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x0b, 0x32, 0x0b, 0x2e, 0x70, 0x62, 0x2e, 0x4c, 0x6f, 0x67, 0x4d, 0x65, 0x74,
-	0x61, 0x48, 0x00, 0x52, 0x04, 0x6d, 0x65, 0x74, 0x61, 0x12, 0x16, 0x0a, 0x05, 0x65, 0x72, 0x72,
-	0x6f, 0x72, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x48, 0x00, 0x52, 0x05, 0x65, 0x72, 0x72, 0x6f,
-	0x72, 0x42, 0x0a, 0x0a, 0x08, 0x72, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x1f, 0x5a,
-	0x1d, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x73, 0x75, 0x6d, 0x69,
-	0x6d, 0x61, 0x6b, 0x69, 0x74, 0x6f, 0x2f, 0x72, 0x61, 0x66, 0x74, 0x2f, 0x70, 0x62, 0x62, 0x06,
-	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x6e, 0x74, 0x65, 0x64, 0x22, 0xd8, 0x01, 0x0a, 0x1a, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c,
+	0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x4d,
+	0x65, 0x74, 0x61, 0x12, 0x12, 0x0a, 0x04, 0x74, 0x65, 0x72, 0x6d, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x04, 0x52, 0x04, 0x74, 0x65, 0x72, 0x6d, 0x12, 0x1b, 0x0a, 0x09, 0x6c, 0x65, 0x61, 0x64, 0x65,
+	0x72, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6c, 0x65, 0x61, 0x64,
+	0x65, 0x72, 0x49, 0x64, 0x12, 0x2e, 0x0a, 0x13, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x69, 0x6e, 0x63,
+	0x6c, 0x75, 0x64, 0x65, 0x64, 0x5f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x18, 0x03, 0x20, 0x01, 0x28,
+	0x04, 0x52, 0x11, 0x6c, 0x61, 0x73, 0x74, 0x49, 0x6e, 0x63, 0x6c, 0x75, 0x64, 0x65, 0x64, 0x49,
+	0x6e, 0x64, 0x65, 0x78, 0x12, 0x2c, 0x0a, 0x12, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x69, 0x6e, 0x63,
+	0x6c, 0x75, 0x64, 0x65, 0x64, 0x5f, 0x74, 0x65, 0x72, 0x6d, 0x18, 0x04, 0x20, 0x01, 0x28, 0x04,
+	0x52, 0x10, 0x6c, 0x61, 0x73, 0x74, 0x49, 0x6e, 0x63, 0x6c, 0x75, 0x64, 0x65, 0x64, 0x54, 0x65,
+	0x72, 0x6d, 0x12, 0x2b, 0x0a, 0x11, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x5f, 0x6d,
+	0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x18, 0x05, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x10, 0x73,
+	0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x22,
+	0x30, 0x0a, 0x1a, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
+	0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x44, 0x61, 0x74, 0x61, 0x12, 0x12, 0x0a,
+	0x04, 0x64, 0x61, 0x74, 0x61, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x04, 0x64, 0x61, 0x74,
+	0x61, 0x22, 0x2d, 0x0a, 0x17, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x53, 0x6e, 0x61, 0x70,
+	0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x12, 0x0a, 0x04,
+	0x74, 0x65, 0x72, 0x6d, 0x18, 0x01, 0x20, 0x01, 0x28, 0x04, 0x52, 0x04, 0x74, 0x65, 0x72, 0x6d,
+	0x22, 0x32, 0x0a, 0x0f, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x4c, 0x6f, 0x67, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x04, 0x62, 0x6f, 0x64, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x0b, 0x32, 0x0b, 0x2e, 0x70, 0x62, 0x2e, 0x4c, 0x6f, 0x67, 0x42, 0x6f, 0x64, 0x79, 0x52, 0x04,
+	0x62, 0x6f, 0x64, 0x79, 0x22, 0x59, 0x0a, 0x10, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x4c, 0x6f, 0x67,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x21, 0x0a, 0x04, 0x6d, 0x65, 0x74, 0x61,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x0b, 0x2e, 0x70, 0x62, 0x2e, 0x4c, 0x6f, 0x67, 0x4d,
+	0x65, 0x74, 0x61, 0x48, 0x00, 0x52, 0x04, 0x6d, 0x65, 0x74, 0x61, 0x12, 0x16, 0x0a, 0x05, 0x65,
+	0x72, 0x72, 0x6f, 0x72, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x48, 0x00, 0x52, 0x05, 0x65, 0x72,
+	0x72, 0x6f, 0x72, 0x42, 0x0a, 0x0a, 0x08, 0x72, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42,
+	0x1f, 0x5a, 0x1d, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x73, 0x75,
+	0x6d, 0x69, 0x6d, 0x61, 0x6b, 0x69, 0x74, 0x6f, 0x2f, 0x72, 0x61, 0x66, 0x74, 0x2f, 0x70, 0x62,
+	0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -717,29 +692,28 @@ func file_rpc_proto_rawDescGZIP() []byte {
 
 var file_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_rpc_proto_goTypes = []interface{}{
-	(*AppendEntriesRequest)(nil),        // 0: pb.AppendEntriesRequest
-	(*AppendEntriesResponse)(nil),       // 1: pb.AppendEntriesResponse
-	(*RequestVoteRequest)(nil),          // 2: pb.RequestVoteRequest
-	(*RequestVoteResponse)(nil),         // 3: pb.RequestVoteResponse
-	(*InstallSnapshotRequest)(nil),      // 4: pb.InstallSnapshotRequest
-	(*InstallSnapshotResponse)(nil),     // 5: pb.InstallSnapshotResponse
-	(*ApplyLogRequest)(nil),             // 6: pb.ApplyLogRequest
-	(*ApplyLogResponse)(nil),            // 7: pb.ApplyLogResponse
-	(*InstallSnapshotRequest_Meta)(nil), // 8: pb.InstallSnapshotRequest.Meta
-	(*Log)(nil),                         // 9: pb.Log
-	(*LogBody)(nil),                     // 10: pb.LogBody
-	(*LogMeta)(nil),                     // 11: pb.LogMeta
+	(*AppendEntriesRequest)(nil),       // 0: pb.AppendEntriesRequest
+	(*AppendEntriesResponse)(nil),      // 1: pb.AppendEntriesResponse
+	(*RequestVoteRequest)(nil),         // 2: pb.RequestVoteRequest
+	(*RequestVoteResponse)(nil),        // 3: pb.RequestVoteResponse
+	(*InstallSnapshotRequestMeta)(nil), // 4: pb.InstallSnapshotRequestMeta
+	(*InstallSnapshotRequestData)(nil), // 5: pb.InstallSnapshotRequestData
+	(*InstallSnapshotResponse)(nil),    // 6: pb.InstallSnapshotResponse
+	(*ApplyLogRequest)(nil),            // 7: pb.ApplyLogRequest
+	(*ApplyLogResponse)(nil),           // 8: pb.ApplyLogResponse
+	(*Log)(nil),                        // 9: pb.Log
+	(*LogBody)(nil),                    // 10: pb.LogBody
+	(*LogMeta)(nil),                    // 11: pb.LogMeta
 }
 var file_rpc_proto_depIdxs = []int32{
 	9,  // 0: pb.AppendEntriesRequest.entries:type_name -> pb.Log
-	8,  // 1: pb.InstallSnapshotRequest.meta:type_name -> pb.InstallSnapshotRequest.Meta
-	10, // 2: pb.ApplyLogRequest.body:type_name -> pb.LogBody
-	11, // 3: pb.ApplyLogResponse.meta:type_name -> pb.LogMeta
-	4,  // [4:4] is the sub-list for method output_type
-	4,  // [4:4] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	10, // 1: pb.ApplyLogRequest.body:type_name -> pb.LogBody
+	11, // 2: pb.ApplyLogResponse.meta:type_name -> pb.LogMeta
+	3,  // [3:3] is the sub-list for method output_type
+	3,  // [3:3] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_rpc_proto_init() }
@@ -798,7 +772,7 @@ func file_rpc_proto_init() {
 			}
 		}
 		file_rpc_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*InstallSnapshotRequest); i {
+			switch v := v.(*InstallSnapshotRequestMeta); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -810,7 +784,7 @@ func file_rpc_proto_init() {
 			}
 		}
 		file_rpc_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*InstallSnapshotResponse); i {
+			switch v := v.(*InstallSnapshotRequestData); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -822,7 +796,7 @@ func file_rpc_proto_init() {
 			}
 		}
 		file_rpc_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ApplyLogRequest); i {
+			switch v := v.(*InstallSnapshotResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -834,7 +808,7 @@ func file_rpc_proto_init() {
 			}
 		}
 		file_rpc_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ApplyLogResponse); i {
+			switch v := v.(*ApplyLogRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -846,7 +820,7 @@ func file_rpc_proto_init() {
 			}
 		}
 		file_rpc_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*InstallSnapshotRequest_Meta); i {
+			switch v := v.(*ApplyLogResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -858,11 +832,7 @@ func file_rpc_proto_init() {
 			}
 		}
 	}
-	file_rpc_proto_msgTypes[4].OneofWrappers = []interface{}{
-		(*InstallSnapshotRequest_Meta_)(nil),
-		(*InstallSnapshotRequest_Data)(nil),
-	}
-	file_rpc_proto_msgTypes[7].OneofWrappers = []interface{}{
+	file_rpc_proto_msgTypes[8].OneofWrappers = []interface{}{
 		(*ApplyLogResponse_Meta)(nil),
 		(*ApplyLogResponse_Error)(nil),
 	}

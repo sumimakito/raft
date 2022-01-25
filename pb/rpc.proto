@@ -34,18 +34,15 @@ message RequestVoteResponse {
   bool granted = 3;
 }
 
-message InstallSnapshotRequest {
-  message Meta {
-    uint64 term = 1;
-    string leader_id = 2;
-    uint64 last_included_index = 3;
-    uint64 last_included_term = 4;
-  }
-  oneof request {
-    Meta meta = 1;
-    bytes data = 2;
-  }
+message InstallSnapshotRequestMeta {
+  uint64 term = 1;
+  string leader_id = 2;
+  uint64 last_included_index = 3;
+  uint64 last_included_term = 4;
+  bytes snapshot_metadata = 5;
 }
+
+message InstallSnapshotRequestData { bytes data = 1; }
 
 message InstallSnapshotResponse { uint64 term = 1; }
 

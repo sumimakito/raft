@@ -46,20 +46,24 @@ func (a *stateMachineAdapter) Apply(index, term uint64, command Command) {
 // Unsafe for concurrent use.
 func (a *stateMachineAdapter) Snapshot() (spanshotID string, err error) {
 	c := a.server.confStore.Latest()
+	if c.Joint() {
+		a.server.logger.Debugw("snapshot skipped due to joint consensus", logFields(a.server)...)
+		return a.lastSnapshotID, nil
+	}
 	snapshot := a.stateMachine.Snapshot()
 	index, term := a.lastIndex, a.lastTerm
 	if index == a.lastSnapshotIndex && term == a.lastSnapshotTerm {
 		a.server.logger.Debugw("snapshot skipped", logFields(a.server)...)
 		return a.lastSnapshotID, nil
 	}
-	sink, err := a.server.snapshot.Create(index, term, c)
+	sink, err := a.server.snapshot.Create(index, term, c.Configuration)
 	if err != nil {
 		return "", err
 	}
-	snapshotID := sink.ID()
+	snapshotId := sink.Id()
 	a.server.logger.Infow("ready to take a snapshot",
 		logFields(a.server,
-			zap.String("snapshot_id", snapshotID),
+			zap.String("snapshot_id", snapshotId),
 			zap.Uint64("snapshot_index", index),
 			zap.Uint64("snapshot_term", term))...)
 	if err := snapshot.Write(sink); err != nil {
@@ -71,11 +75,11 @@ func (a *stateMachineAdapter) Snapshot() (spanshotID string, err error) {
 	if err := sink.Close(); err != nil {
 		return "", err
 	}
-	a.lastSnapshotIndex, a.lastSnapshotTerm, a.lastSnapshotID = index, term, snapshotID
+	a.lastSnapshotIndex, a.lastSnapshotTerm, a.lastSnapshotID = index, term, snapshotId
 	a.server.logger.Infow("snapshot has been taken",
 		logFields(a.server,
-			zap.String("snapshot_id", snapshotID),
+			zap.String("snapshot_id", snapshotId),
 			zap.Uint64("snapshot_index", index),
 			zap.Uint64("snapshot_term", term))...)
-	return snapshotID, nil
+	return snapshotId, nil
 }

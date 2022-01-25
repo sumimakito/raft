@@ -1,8 +1,11 @@
 package grpctrans
 
 import (
+	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/rpc"
@@ -13,6 +16,8 @@ import (
 	"github.com/sumimakito/raft/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
 
 type grpcService struct {
@@ -40,14 +45,55 @@ func (s *grpcService) RequestVote(ctx context.Context, request *pb.RequestVoteRe
 	return response.Response.(*pb.RequestVoteResponse), nil
 }
 
-func (s *grpcService) InstallSnapshot(ctx context.Context, request *pb.InstallSnapshotRequest) (*pb.InstallSnapshotResponse, error) {
+func (s *grpcService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer) error {
+	streamMetadata, ok := metadata.FromIncomingContext(stream.Context())
+	if !ok {
+		return errors.New("invalid metadata")
+	}
+	var requestMetaBase64 string
+	if values := streamMetadata.Get("requestMeta"); len(values) < 1 {
+		return errors.New("invalid metadata")
+	} else {
+		requestMetaBase64 = values[0]
+	}
+	requestMetaBytes, err := base64.StdEncoding.DecodeString(requestMetaBase64)
+	if err != nil {
+		return err
+	}
+	var requestMeta pb.InstallSnapshotRequestMeta
+	if err := proto.Unmarshal(requestMetaBytes, &requestMeta); err != nil {
+		return err
+	}
+
+	request := raft.InstallSnapshotRequest{
+		Metadata: &requestMeta,
+	}
+
+	pipeReader, pipeWriter := io.Pipe()
+	writer := bufio.NewWriter(pipeWriter)
+	request.Reader = raft.NewBufferedReadCloser(pipeReader)
+
 	r := raft.NewRPC(request)
 	s.rpcCh <- r
-	response := <-r.Response()
-	if response.Error != nil {
-		return nil, response.Error
+
+	for {
+		r, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		writer.Write(r.Data)
 	}
-	return response.Response.(*pb.InstallSnapshotResponse), nil
+	pipeWriter.Close()
+
+	response := <-r.Response()
+
+	if response.Error != nil {
+		return response.Error
+	}
+	return stream.SendAndClose(response.Response.(*pb.InstallSnapshotResponse))
 }
 
 func (s *grpcService) ApplyLog(ctx context.Context, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {
@@ -201,11 +247,33 @@ func (t *Transport) RequestVote(
 }
 
 func (t *Transport) InstallSnapshot(
-	ctx context.Context, peer *pb.Peer, request *pb.InstallSnapshotRequest,
+	ctx context.Context, peer *pb.Peer, requestMeta *pb.InstallSnapshotRequestMeta, reader io.Reader,
 ) (*pb.InstallSnapshotResponse, error) {
 	var response *pb.InstallSnapshotResponse
 	if err := t.tryClient(peer, func(c *rpcClient) error {
-		r, err := c.client.InstallSnapshot(ctx, request)
+		reqestMetaByets, err := proto.Marshal(requestMeta)
+		if err != nil {
+			return err
+		}
+		ctx := metadata.AppendToOutgoingContext(ctx, "requestMeta", base64.StdEncoding.EncodeToString(reqestMetaByets))
+		client, err := c.client.InstallSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		chunk := make([]byte, 1024)
+		for {
+			n, err := reader.Read(chunk)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if err := client.Send(&pb.InstallSnapshotRequestData{Data: chunk[:n]}); err != nil {
+				return err
+			}
+		}
+		r, err := client.CloseAndRecv()
 		if err != nil {
 			return err
 		}

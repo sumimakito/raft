@@ -20,7 +20,7 @@ const _ = grpc.SupportPackageIsVersion7
 type TransportClient interface {
 	AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
 	RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error)
-	InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error)
+	InstallSnapshot(ctx context.Context, opts ...grpc.CallOption) (Transport_InstallSnapshotClient, error)
 	ApplyLog(ctx context.Context, in *ApplyLogRequest, opts ...grpc.CallOption) (*ApplyLogResponse, error)
 }
 
@@ -50,13 +50,38 @@ func (c *transportClient) RequestVote(ctx context.Context, in *RequestVoteReques
 	return out, nil
 }
 
-func (c *transportClient) InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error) {
-	out := new(InstallSnapshotResponse)
-	err := c.cc.Invoke(ctx, "/pb.Transport/InstallSnapshot", in, out, opts...)
+func (c *transportClient) InstallSnapshot(ctx context.Context, opts ...grpc.CallOption) (Transport_InstallSnapshotClient, error) {
+	stream, err := c.cc.NewStream(ctx, &Transport_ServiceDesc.Streams[0], "/pb.Transport/InstallSnapshot", opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &transportInstallSnapshotClient{stream}
+	return x, nil
+}
+
+type Transport_InstallSnapshotClient interface {
+	Send(*InstallSnapshotRequestData) error
+	CloseAndRecv() (*InstallSnapshotResponse, error)
+	grpc.ClientStream
+}
+
+type transportInstallSnapshotClient struct {
+	grpc.ClientStream
+}
+
+func (x *transportInstallSnapshotClient) Send(m *InstallSnapshotRequestData) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *transportInstallSnapshotClient) CloseAndRecv() (*InstallSnapshotResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(InstallSnapshotResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *transportClient) ApplyLog(ctx context.Context, in *ApplyLogRequest, opts ...grpc.CallOption) (*ApplyLogResponse, error) {
@@ -74,7 +99,7 @@ func (c *transportClient) ApplyLog(ctx context.Context, in *ApplyLogRequest, opt
 type TransportServer interface {
 	AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
 	RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error)
-	InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
+	InstallSnapshot(Transport_InstallSnapshotServer) error
 	ApplyLog(context.Context, *ApplyLogRequest) (*ApplyLogResponse, error)
 	mustEmbedUnimplementedTransportServer()
 }
@@ -89,8 +114,8 @@ func (UnimplementedTransportServer) AppendEntries(context.Context, *AppendEntrie
 func (UnimplementedTransportServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequestVote not implemented")
 }
-func (UnimplementedTransportServer) InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method InstallSnapshot not implemented")
+func (UnimplementedTransportServer) InstallSnapshot(Transport_InstallSnapshotServer) error {
+	return status.Errorf(codes.Unimplemented, "method InstallSnapshot not implemented")
 }
 func (UnimplementedTransportServer) ApplyLog(context.Context, *ApplyLogRequest) (*ApplyLogResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ApplyLog not implemented")
@@ -144,22 +169,30 @@ func _Transport_RequestVote_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Transport_InstallSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InstallSnapshotRequest)
-	if err := dec(in); err != nil {
+func _Transport_InstallSnapshot_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(TransportServer).InstallSnapshot(&transportInstallSnapshotServer{stream})
+}
+
+type Transport_InstallSnapshotServer interface {
+	SendAndClose(*InstallSnapshotResponse) error
+	Recv() (*InstallSnapshotRequestData, error)
+	grpc.ServerStream
+}
+
+type transportInstallSnapshotServer struct {
+	grpc.ServerStream
+}
+
+func (x *transportInstallSnapshotServer) SendAndClose(m *InstallSnapshotResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *transportInstallSnapshotServer) Recv() (*InstallSnapshotRequestData, error) {
+	m := new(InstallSnapshotRequestData)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	if interceptor == nil {
-		return srv.(TransportServer).InstallSnapshot(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/pb.Transport/InstallSnapshot",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TransportServer).InstallSnapshot(ctx, req.(*InstallSnapshotRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return m, nil
 }
 
 func _Transport_ApplyLog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -196,14 +229,16 @@ var Transport_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Transport_RequestVote_Handler,
 		},
 		{
-			MethodName: "InstallSnapshot",
-			Handler:    _Transport_InstallSnapshot_Handler,
-		},
-		{
 			MethodName: "ApplyLog",
 			Handler:    _Transport_ApplyLog_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "InstallSnapshot",
+			Handler:       _Transport_InstallSnapshot_Handler,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "transport.proto",
 }

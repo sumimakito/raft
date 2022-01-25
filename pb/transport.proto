@@ -9,6 +9,6 @@ package pb;
 service Transport {
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
   rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
-  rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
+  rpc InstallSnapshot(stream InstallSnapshotRequestData) returns (InstallSnapshotResponse);
   rpc ApplyLog(ApplyLogRequest) returns (ApplyLogResponse);
 }

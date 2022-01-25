@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"io"
 
 	"github.com/sumimakito/raft/pb"
 )
@@ -12,7 +13,7 @@ type Transport interface {
 
 	AppendEntries(ctx context.Context, peer *pb.Peer, request *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error)
 	RequestVote(ctx context.Context, peer *pb.Peer, request *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error)
-	InstallSnapshot(ctx context.Context, peer *pb.Peer, request *pb.InstallSnapshotRequest) (*pb.InstallSnapshotResponse, error)
+	InstallSnapshot(ctx context.Context, peer *pb.Peer, requestMeta *pb.InstallSnapshotRequestMeta, reader io.Reader) (*pb.InstallSnapshotResponse, error)
 	ApplyLog(ctx context.Context, peer *pb.Peer, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error)
 
 	RPC() <-chan *RPC

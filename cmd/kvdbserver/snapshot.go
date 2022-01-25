@@ -11,47 +11,93 @@ import (
 	"strings"
 
 	"github.com/sumimakito/raft"
-	"github.com/ugorji/go/codec"
+	kvdbpb "github.com/sumimakito/raft/cmd/kvdbserver/pb"
+	"github.com/sumimakito/raft/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 type SnapshotMeta struct {
-	raft.SnapshotMeta
-	Size int `json:"size" codec:"size"`
+	metadata *kvdbpb.SnapshotMeta
+}
+
+func (m *SnapshotMeta) Id() string {
+	return m.metadata.Id
+}
+
+func (m *SnapshotMeta) SetId(id string) {
+	m.metadata.Id = id
+}
+
+func (m *SnapshotMeta) Index() uint64 {
+	return m.metadata.Index
+}
+
+func (m *SnapshotMeta) SetIndex(index uint64) {
+	m.metadata.Index = index
+}
+
+func (m *SnapshotMeta) Term() uint64 {
+	return m.metadata.Term
+}
+
+func (m *SnapshotMeta) SetTerm(term uint64) {
+	m.metadata.Term = term
+}
+
+func (m *SnapshotMeta) Configuration() *pb.Configuration {
+	return m.metadata.Configuration
+}
+
+func (m *SnapshotMeta) SetConfiguration(configuration *pb.Configuration) {
+	m.metadata.Configuration = configuration
+}
+
+func (m *SnapshotMeta) Size() uint64 {
+	return m.metadata.Size
+}
+
+func (m *SnapshotMeta) SetSize(size uint64) {
+	m.metadata.Size = size
+}
+
+func (m *SnapshotMeta) CRC64() uint64 {
+	return m.metadata.Crc64
+}
+
+func (m *SnapshotMeta) SetCRC64(crc64 uint64) {
+	m.metadata.Crc64 = crc64
 }
 
 type SnapshotSink struct {
 	wipDir   string
 	finalDir string
 
-	meta SnapshotMeta
+	metadata *SnapshotMeta
 
 	snapshotFile   *os.File
 	snapshotWriter *bufio.Writer
 }
 
-func newSnapshotSink(wipDir, finalDir string, m raft.SnapshotMeta) *SnapshotSink {
+func newSnapshotSink(wipDir, finalDir string, metadata *SnapshotMeta) *SnapshotSink {
 	return &SnapshotSink{
 		wipDir:   wipDir,
 		finalDir: finalDir,
-		meta: SnapshotMeta{
-			SnapshotMeta: m,
-			Size:         0,
-		},
+		metadata: metadata,
 	}
 }
 
 func (s *SnapshotSink) writeMeta() error {
-	file, err := os.OpenFile(filepath.Join(s.wipDir, "meta"), os.O_CREATE|os.O_RDWR, 0600)
+	file, err := os.OpenFile(filepath.Join(s.wipDir, "metadata"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	writer := bufio.NewWriter(file)
-	var b []byte
-	if err := codec.NewEncoderBytes(&b, &codec.MsgpackHandle{}).Encode(s.meta); err != nil {
+	writer := raft.NewBufferedWriteCloser(file)
+	defer writer.Close()
+	metadataBytes, err := proto.Marshal(s.metadata.metadata)
+	if err != nil {
 		return err
 	}
-	if _, err := writer.Write(b); err != nil {
+	if _, err := writer.Write(metadataBytes); err != nil {
 		return err
 	}
 	if err := writer.Flush(); err != nil {
@@ -86,7 +132,7 @@ func (s *SnapshotSink) Write(p []byte) (n int, err error) {
 	if err != nil {
 		return n, err
 	}
-	s.meta.Size += n
+	s.metadata.SetSize(s.metadata.Size() + uint64(n))
 	return n, nil
 }
 
@@ -103,8 +149,8 @@ func (s *SnapshotSink) Close() error {
 	return nil
 }
 
-func (s *SnapshotSink) ID() string {
-	return s.meta.ID
+func (s *SnapshotSink) Id() string {
+	return s.metadata.Id()
 }
 
 func (s *SnapshotSink) Cancel() error {
@@ -125,7 +171,7 @@ func NewSnapshotStore(storeDir string) *SnapshotStore {
 	return &SnapshotStore{storeDir: storeDir}
 }
 
-func (s *SnapshotStore) Create(index, term uint64, c *raft.Configuration) (raft.SnapshotSink, error) {
+func (s *SnapshotStore) Create(index, term uint64, c *pb.Configuration) (raft.SnapshotSink, error) {
 	id := raft.NewObjectID().Hex()
 
 	wipDir := filepath.Join(s.storeDir, fmt.Sprintf("inprogress-%s", id))
@@ -135,17 +181,19 @@ func (s *SnapshotStore) Create(index, term uint64, c *raft.Configuration) (raft.
 		return nil, err
 	}
 
-	sink := newSnapshotSink(wipDir, finalDir, raft.SnapshotMeta{
-		ID:            id,
-		Index:         index,
-		Term:          term,
-		Configuration: c.Copy(),
+	sink := newSnapshotSink(wipDir, finalDir, &SnapshotMeta{
+		metadata: &kvdbpb.SnapshotMeta{
+			Id:            id,
+			Index:         index,
+			Term:          term,
+			Configuration: c.Copy(),
+		},
 	})
 
 	return sink, nil
 }
 
-func (s *SnapshotStore) List() ([]*raft.SnapshotMeta, error) {
+func (s *SnapshotStore) List() ([]raft.SnapshotMeta, error) {
 	ids := []string{}
 	if err := filepath.WalkDir(s.storeDir, func(path string, d fs.DirEntry, err error) error {
 		if path == s.storeDir || !d.IsDir() {
@@ -158,43 +206,45 @@ func (s *SnapshotStore) List() ([]*raft.SnapshotMeta, error) {
 	}); err != nil {
 		return nil, err
 	}
-	metaList := []*raft.SnapshotMeta{}
+	metadataList := []raft.SnapshotMeta{}
 	for _, id := range ids {
 		file, err := os.Open(filepath.Join(s.storeDir, id, "meta"))
 		if err != nil {
 			return nil, err
 		}
-		reader := bufio.NewReader(file)
-		var m SnapshotMeta
-		if err := codec.NewDecoder(reader, &codec.MsgpackHandle{}).Decode(&m); err != nil {
-			file.Close()
+		metadataBytes, err := io.ReadAll(file)
+		file.Close()
+		var metadata kvdbpb.SnapshotMeta
+		if err := proto.Unmarshal(metadataBytes, &metadata); err != nil {
 			return nil, err
 		}
-		metaList = append(metaList, &m.SnapshotMeta)
-		file.Close()
+		metadataList = append(metadataList, &SnapshotMeta{metadata: &metadata})
 	}
 	// Sort by index in descending order
-	sort.SliceStable(metaList, func(i, j int) bool {
-		return metaList[i].Index > metaList[j].Index
+	sort.SliceStable(metadataList, func(i, j int) bool {
+		return metadataList[i].Index() > metadataList[j].Index()
 	})
-	return metaList, nil
+	return metadataList, nil
 }
 
-func (s *SnapshotStore) Open(id string) (*raft.SnapshotMeta, io.ReadCloser, error) {
+func (s *SnapshotStore) Open(id string) (raft.SnapshotMeta, io.ReadCloser, error) {
 	file, err := os.Open(filepath.Join(s.storeDir, id, "metadata"))
 	if err != nil {
 		return nil, nil, err
 	}
-	reader := bufio.NewReader(file)
-	var m SnapshotMeta
-	if err := codec.NewDecoder(reader, &codec.MsgpackHandle{}).Decode(&m); err != nil {
-		file.Close()
-		return nil, nil, err
-	}
+	metadataBytes, err := io.ReadAll(file)
 	file.Close()
+	var metadata kvdbpb.SnapshotMeta
+	proto.Unmarshal(metadataBytes, &metadata)
 	file, err = os.Open(filepath.Join(s.storeDir, id, "snapshot"))
 	if err != nil {
 		return nil, nil, err
 	}
-	return &m.SnapshotMeta, raft.NewBufferedReadCloser(file), nil
+	return &SnapshotMeta{metadata: &metadata}, raft.NewBufferedReadCloser(file), nil
+}
+
+func (s *SnapshotStore) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {
+	var metadata kvdbpb.SnapshotMeta
+	proto.Unmarshal(b, &metadata)
+	return &SnapshotMeta{metadata: &metadata}, nil
 }

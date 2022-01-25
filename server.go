@@ -202,7 +202,7 @@ func (s *Server) handleRPC(rpc *RPC) {
 		rpc.respond(s.rpcHandler.AppendEntries(context.Background(), rpc.requestID, request))
 	case *pb.RequestVoteRequest:
 		rpc.respond(s.rpcHandler.RequestVote(context.Background(), rpc.requestID, request))
-	case *pb.InstallSnapshotRequest:
+	case *InstallSnapshotRequest:
 		rpc.respond(s.rpcHandler.InstallSnapshot(context.TODO(), rpc.requestID, request))
 	case *pb.ApplyLogRequest:
 		rpc.respond(s.rpcHandler.ApplyLog(context.Background(), rpc.requestID, request))
@@ -215,6 +215,26 @@ func (s *Server) handleTerminal() {
 	sig := <-terminalSignalCh()
 	s.shutdownCh <- nil
 	s.logger.Infow("terminal signal captured", logFields(s, "signal", sig)...)
+}
+
+func (s *Server) internalShutdown(err error) {
+	if !s.setShutdownState() {
+		return
+	}
+	s.logger.Infow("ready to shutdown", logFields(s, zap.Error(err))...)
+	if err := s.apiServer.Stop(); err != nil {
+		s.logger.Warnw("error occurred stopping the API server", logFields(s, zap.Error(err))...)
+	}
+	s.snapshotSched.Stop()
+	// Close the Transport
+	if closer, ok := s.trans.(TransportCloser); ok {
+		closer.Close()
+		s.logger.Infow(fmt.Sprintf("transport %T closed", s.trans), logFields(s)...)
+	} else {
+		s.logger.Infow(fmt.Sprintf("transport %T does not implement interface TransportCloser", s.trans), logFields(s)...)
+	}
+	// Send err (if any) to the serve error channel
+	s.serveErrCh <- err
 }
 
 func (s *Server) randomTimer(timeout time.Duration) *time.Timer {
@@ -405,26 +425,6 @@ func (s *Server) serveAPIServer() {
 	if err := s.apiServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 		s.logger.Warn(err)
 	}
-}
-
-func (s *Server) internalShutdown(err error) {
-	if !s.setShutdownState() {
-		return
-	}
-	s.logger.Infow("ready to shutdown", logFields(s, zap.Error(err))...)
-	if err := s.apiServer.Stop(); err != nil {
-		s.logger.Warnw("error occurred stopping the API server", logFields(s, zap.Error(err))...)
-	}
-	s.snapshotSched.Stop()
-	// Close the Transport
-	if closer, ok := s.trans.(TransportCloser); ok {
-		closer.Close()
-		s.logger.Infow(fmt.Sprintf("transport %T closed", s.trans), logFields(s)...)
-	} else {
-		s.logger.Infow(fmt.Sprintf("transport %T does not implement interface TransportCloser", s.trans), logFields(s)...)
-	}
-	// Send err (if any) to the serve error channel
-	s.serveErrCh <- err
 }
 
 func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.CancelFunc) {

@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"io"
 
 	"github.com/sumimakito/raft/pb"
 )
@@ -27,6 +28,11 @@ func (rpc *RPC) Response() <-chan *RPCResponse {
 type RPCResponse struct {
 	Response interface{}
 	Error    error
+}
+
+type InstallSnapshotRequest struct {
+	Metadata *pb.InstallSnapshotRequestMeta
+	Reader   io.ReadCloser
 }
 
 type rpcHandler struct {
@@ -173,12 +179,37 @@ func (h *rpcHandler) RequestVote(
 }
 
 func (h *rpcHandler) InstallSnapshot(
-	ctx context.Context, requestID string, request *pb.InstallSnapshotRequest,
-) (*pb.InstallSnapshotRequest, error) {
+	ctx context.Context, requestID string, request *InstallSnapshotRequest,
+) (*pb.InstallSnapshotResponse, error) {
 	h.server.logger.Infow("incoming RPC: InstallSnapshot",
 		logFields(h.server, "request_id", requestID, "request", request)...)
 
-	return nil, nil
+	snapshotMetadata, err := h.server.snapshot.DecodeMeta(request.Metadata.SnapshotMetadata)
+	if err != nil {
+		return nil, err
+	}
+
+	sink, err := h.server.snapshot.Create(snapshotMetadata.Index(), snapshotMetadata.Term(), snapshotMetadata.Configuration())
+	if err != nil {
+		return nil, err
+	}
+
+	chunk := make([]byte, 0, 1024)
+	for {
+		n, err := request.Reader.Read(chunk)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if _, err := sink.Write(chunk[:n]); err != nil {
+			return nil, err
+		}
+	}
+	request.Reader.Close()
+
+	return &pb.InstallSnapshotResponse{Term: h.server.currentTerm()}, nil
 }
 
 func (h *rpcHandler) ApplyLog(ctx context.Context, requestID string, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {

@@ -5,44 +5,32 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ugorji/go/codec"
+	"github.com/sumimakito/raft/pb"
 )
-
-type Snapshot interface {
-	Meta() SnapshotMeta
-}
 
 type SnapshotPolicy struct {
 	Applies  int
 	Interval time.Duration
 }
 
+type SnapshotMeta interface {
+	Id() string
+	Index() uint64
+	Term() uint64
+	Configuration() *pb.Configuration
+}
+
 type SnapshotSink interface {
 	io.WriteCloser
-	ID() string
+	Id() string
 	Cancel() error
 }
 
-type SnapshotMeta struct {
-	ID            string         `json:"id" codec:"id"`
-	Index         uint64         `json:"index" codec:"index"`
-	Term          uint64         `json:"term" codec:"term"`
-	Configuration *Configuration `json:"configuration" codec:"configuration"`
-}
-
-func (m *SnapshotMeta) Encode() (out []byte) {
-	codec.NewEncoderBytes(&out, &codec.MsgpackHandle{}).MustEncode(m)
-	return
-}
-
-func (m *SnapshotMeta) Decode(in []byte) {
-	codec.NewDecoderBytes(in, &codec.MsgpackHandle{}).MustDecode(m)
-}
-
 type SnapshotStore interface {
-	Create(index, term uint64, c *Configuration) (SnapshotSink, error)
-	List() ([]*SnapshotMeta, error)
-	Open(snapshotID string) (*SnapshotMeta, io.ReadCloser, error)
+	Create(index, term uint64, c *pb.Configuration) (SnapshotSink, error)
+	List() ([]SnapshotMeta, error)
+	Open(id string) (SnapshotMeta, io.ReadCloser, error)
+	DecodeMeta(b []byte) (SnapshotMeta, error)
 }
 
 // snapshotScheduler is responsible for triggering snapshot creations under
@@ -63,7 +51,6 @@ type snapshotScheduler struct {
 func newSnapshotScheduler(server *Server) *snapshotScheduler {
 	return &snapshotScheduler{
 		server:    server,
-		ctl:       newAsyncCtl(),
 		interval:  server.opts.snapshotPolicy.Interval,
 		applies:   server.opts.snapshotPolicy.Applies,
 		appliesCh: make(chan struct{}, 1),
@@ -122,13 +109,12 @@ func (s *snapshotScheduler) Start() {
 	defer s.mu.Unlock()
 
 	if s.ctl != nil {
-		s.server.logger.Panic("attempt to start a started snapshotScheduler")
-	}
-
-	select {
-	case <-s.ctl.Cancelled():
-		s.server.logger.Panic("attempt to reuse a stopped snapshotScheduler")
-	default:
+		select {
+		case <-s.ctl.Cancelled():
+			s.server.logger.Panic("attempt to reuse a stopped snapshotScheduler")
+		default:
+			s.server.logger.Panic("attempt to start a started snapshotScheduler")
+		}
 	}
 
 	s.ctl = newAsyncCtl()
