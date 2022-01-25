@@ -208,7 +208,7 @@ func (s *SnapshotStore) List() ([]raft.SnapshotMeta, error) {
 	}
 	metadataList := []raft.SnapshotMeta{}
 	for _, id := range ids {
-		file, err := os.Open(filepath.Join(s.storeDir, id, "meta"))
+		file, err := os.Open(filepath.Join(s.storeDir, id, "metadata"))
 		if err != nil {
 			return nil, err
 		}
