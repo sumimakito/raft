@@ -72,7 +72,7 @@ type KVSMSnapshot struct {
 
 func (s *KVSMSnapshot) Write(sink raft.SnapshotSink) error {
 	var out []byte
-	if err := codec.NewEncoderBytes(&out, &codec.MsgpackHandle{}).Encode(s.keyValues); err != nil {
+	if err := codec.NewEncoder(sink, &codec.MsgpackHandle{}).Encode(s.keyValues); err != nil {
 		return err
 	}
 	_, err := sink.Write(out)
