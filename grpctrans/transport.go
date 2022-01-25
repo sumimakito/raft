@@ -261,7 +261,7 @@ func (t *Transport) InstallSnapshot(
 		if err != nil {
 			return err
 		}
-		chunk := make([]byte, 0, 1024)
+		chunk := make([]byte, 4096)
 		for {
 			n, err := reader.Read(chunk)
 			if err == io.EOF {

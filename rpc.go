@@ -205,7 +205,7 @@ func (h *rpcHandler) InstallSnapshot(
 		return nil, err
 	}
 
-	chunk := make([]byte, 0, 1024)
+	chunk := make([]byte, 4096)
 	for {
 		n, err := request.Reader.Read(chunk)
 		if err == io.EOF {
