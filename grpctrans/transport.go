@@ -64,31 +64,35 @@ func (s *grpcService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer)
 		return err
 	}
 
-	pipeReader, pipeWriter := io.Pipe()
-	writer := raft.NewBufferedWriteCloser(pipeWriter)
+	pr, pw := io.Pipe()
+	writer := raft.NewBufferedWriteCloser(pw)
 
 	request := &raft.InstallSnapshotRequest{
 		Metadata: &requestMeta,
-		Reader:   raft.NewBufferedReadCloser(pipeReader),
+		Reader:   raft.NewBufferedReadCloser(pr),
 	}
 
 	r := raft.NewRPC(stream.Context(), request)
 	s.rpcCh <- r
 
-	for {
-		requestData, err := stream.Recv()
-		if err == io.EOF {
-			break
+	go func() {
+		defer writer.Close()
+		for {
+			requestData, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				r.Respond(nil, err)
+				return
+			}
+			if _, err := writer.Write(requestData.Data); err != nil {
+				r.Respond(nil, err)
+				return
+			}
 		}
-		if err != nil {
-			return err
-		}
-		if _, err := writer.Write(requestData.Data); err != nil {
-			return err
-		}
-	}
-	writer.Flush()
-	writer.Close()
+		writer.Flush()
+	}()
 
 	response, err := r.Response()
 	if err != nil {
