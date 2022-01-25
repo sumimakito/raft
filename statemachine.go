@@ -7,8 +7,8 @@ import (
 
 type StateMachine interface {
 	Apply(command Command)
-	Snapshot() StateMachineSnapshot
-	Restore()
+	Snapshot() (StateMachineSnapshot, error)
+	Restore(snapshot *Snapshot) error
 }
 
 type StateMachineSnapshot interface {
@@ -50,7 +50,10 @@ func (a *stateMachineAdapter) Snapshot() (spanshotId string, err error) {
 		a.server.logger.Debugw("snapshot skipped due to joint consensus", logFields(a.server)...)
 		return a.lastSnapshotId, nil
 	}
-	snapshot := a.stateMachine.Snapshot()
+	snapshot, err := a.stateMachine.Snapshot()
+	if err != nil {
+		return "", err
+	}
 	index, term := a.lastIndex, a.lastTerm
 	if index == a.lastSnapshotIndex && term == a.lastSnapshotTerm {
 		a.server.logger.Debugw("snapshot skipped", logFields(a.server)...)

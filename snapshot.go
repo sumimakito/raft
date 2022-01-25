@@ -8,6 +8,11 @@ import (
 	"github.com/sumimakito/raft/pb"
 )
 
+type Snapshot struct {
+	Meta   SnapshotMeta
+	Reader io.ReadCloser
+}
+
 type SnapshotPolicy struct {
 	Applies  int
 	Interval time.Duration
@@ -30,7 +35,7 @@ type SnapshotSink interface {
 type SnapshotStore interface {
 	Create(index, term uint64, c *pb.Configuration) (SnapshotSink, error)
 	List() ([]SnapshotMeta, error)
-	Open(id string) (SnapshotMeta, io.ReadCloser, error)
+	Open(id string) (*Snapshot, error)
 	DecodeMeta(b []byte) (SnapshotMeta, error)
 }
 

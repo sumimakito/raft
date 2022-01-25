@@ -218,11 +218,11 @@ func (s *SnapshotStore) List() ([]raft.SnapshotMeta, error) {
 		}
 		metadataBytes, err := io.ReadAll(file)
 		file.Close()
-		var metadata kvdbpb.SnapshotMeta
-		if err := proto.Unmarshal(metadataBytes, &metadata); err != nil {
+		metadata, err := s.DecodeMeta(metadataBytes)
+		if err != nil {
 			return nil, err
 		}
-		metadataList = append(metadataList, &SnapshotMeta{metadata: &metadata})
+		metadataList = append(metadataList, metadata)
 	}
 	// Sort by index in descending order
 	sort.SliceStable(metadataList, func(i, j int) bool {
@@ -231,10 +231,10 @@ func (s *SnapshotStore) List() ([]raft.SnapshotMeta, error) {
 	return metadataList, nil
 }
 
-func (s *SnapshotStore) Open(id string) (raft.SnapshotMeta, io.ReadCloser, error) {
+func (s *SnapshotStore) Open(id string) (*raft.Snapshot, error) {
 	file, err := os.Open(filepath.Join(s.storeDir, id, "metadata"))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	metadataBytes, err := io.ReadAll(file)
 	file.Close()
@@ -242,9 +242,12 @@ func (s *SnapshotStore) Open(id string) (raft.SnapshotMeta, io.ReadCloser, error
 	proto.Unmarshal(metadataBytes, &metadata)
 	file, err = os.Open(filepath.Join(s.storeDir, id, "snapshot"))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return &SnapshotMeta{metadata: &metadata}, raft.NewBufferedReadCloser(file), nil
+	return &raft.Snapshot{
+		Meta:   &SnapshotMeta{metadata: &metadata},
+		Reader: raft.NewBufferedReadCloser(file),
+	}, nil
 }
 
 func (s *SnapshotStore) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {

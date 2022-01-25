@@ -218,24 +218,24 @@ INSTALL_SNAPSHOT:
 		goto WAIT_NEXT
 	}
 
-	snapshotMeta, snapshotReader, err := s.sched.server.snapshot.Open(metadataList[0].Id())
+	snapshot, err := s.sched.server.snapshot.Open(metadataList[0].Id())
 	if err != nil {
 		s.sched.server.logger.Infow("error opening snapshot",
 			logFields(s.sched.server,
 				"replication_id", ctl.replID,
 				"peer", s.peer,
-				"snapshot_id", snapshotMeta.Id(),
+				"snapshot_id", snapshot.Meta.Id(),
 				"error", err)...)
 		goto WAIT_NEXT
 	}
 
-	snapshotMetaBytes, err := snapshotMeta.Encode()
+	snapshotMetaBytes, err := snapshot.Meta.Encode()
 	if err != nil {
 		s.sched.server.logger.Infow("error encoding snapshot metadata",
 			logFields(s.sched.server,
 				"replication_id", ctl.replID,
 				"peer", s.peer,
-				"snapshot_id", snapshotMeta.Id(),
+				"snapshot_id", snapshot.Meta.Id(),
 				"error", err)...)
 		goto WAIT_NEXT
 	}
@@ -243,17 +243,17 @@ INSTALL_SNAPSHOT:
 	requestMeta := &pb.InstallSnapshotRequestMeta{
 		Term:              s.sched.server.currentTerm(),
 		LeaderId:          s.sched.server.Leader().Id,
-		LastIncludedIndex: snapshotMeta.Index(),
-		LastIncludedTerm:  snapshotMeta.Term(),
+		LastIncludedIndex: snapshot.Meta.Index(),
+		LastIncludedTerm:  snapshot.Meta.Term(),
 		SnapshotMetadata:  snapshotMetaBytes,
 	}
 
-	if _, err := s.sched.server.trans.InstallSnapshot(ctl.Context(), s.peer, requestMeta, snapshotReader); err != nil {
+	if _, err := s.sched.server.trans.InstallSnapshot(ctl.Context(), s.peer, requestMeta, snapshot.Reader); err != nil {
 		s.sched.server.logger.Infow("error installing snapshot",
 			logFields(s.sched.server,
 				"replication_id", ctl.replID,
 				"peer", s.peer,
-				"snapshot_id", snapshotMeta.Id(),
+				"snapshot_id", snapshot.Meta.Id(),
 				"error", err)...)
 		goto WAIT_NEXT
 	}
@@ -262,7 +262,7 @@ INSTALL_SNAPSHOT:
 		logFields(s.sched.server,
 			"replication_id", ctl.replID,
 			"peer", s.peer,
-			"snapshot_id", snapshotMeta.Id())...)
+			"snapshot_id", snapshot.Meta.Id())...)
 
 	goto WAIT_NEXT
 }

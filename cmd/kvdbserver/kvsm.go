@@ -54,17 +54,26 @@ func (m *KVSM) KeyValues() map[string][]byte {
 	return keyValues
 }
 
-func (m *KVSM) Snapshot() raft.StateMachineSnapshot {
+func (m *KVSM) Snapshot() (raft.StateMachineSnapshot, error) {
 	m.statesMu.RLock()
 	defer m.statesMu.RUnlock()
 	keyValues := map[string][]byte{}
 	for key, value := range m.states {
 		keyValues[key] = append(([]byte)(nil), value...)
 	}
-	return &KVSMSnapshot{keyValues: keyValues}
+	return &KVSMSnapshot{keyValues: keyValues}, nil
 }
 
-func (m *KVSM) Restore() {}
+func (m *KVSM) Restore(snapshot *raft.Snapshot) error {
+	m.statesMu.RLock()
+	defer m.statesMu.RUnlock()
+	keyValues := map[string][]byte{}
+	if err := codec.NewDecoder(snapshot.Reader, &codec.MsgpackHandle{}).Decode(&keyValues); err != nil {
+		return err
+	}
+	m.states = keyValues
+	return nil
+}
 
 type KVSMSnapshot struct {
 	keyValues map[string][]byte
