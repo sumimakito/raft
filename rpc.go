@@ -205,21 +205,11 @@ func (h *rpcHandler) InstallSnapshot(
 		return nil, err
 	}
 
-	chunk := make([]byte, 4096)
-	for {
-		n, err := request.Reader.Read(chunk)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			sink.Cancel()
-			return nil, err
-		}
-		if _, err := sink.Write(chunk[:n]); err != nil {
-			sink.Cancel()
-			return nil, err
-		}
+	if _, err := io.Copy(sink, request.Reader); err != nil {
+		sink.Cancel()
+		return nil, err
 	}
+
 	if err := sink.Close(); err != nil {
 		return nil, err
 	}
