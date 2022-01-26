@@ -255,3 +255,19 @@ func (s *SnapshotStore) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {
 	proto.Unmarshal(b, &metadata)
 	return &SnapshotMeta{metadata: &metadata}, nil
 }
+
+func (s *SnapshotStore) Trim(index uint64) error {
+	metadataList, err := s.List()
+	if err != nil {
+		return err
+	}
+	i := sort.Search(len(metadataList), func(i int) bool {
+		return metadataList[i].Index() < index
+	})
+	for _, metadata := range metadataList[i:] {
+		if err := os.RemoveAll(filepath.Join(s.storeDir, metadata.Id())); err != nil {
+			return err
+		}
+	}
+	return nil
+}

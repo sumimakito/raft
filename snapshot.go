@@ -37,6 +37,10 @@ type SnapshotStore interface {
 	List() ([]SnapshotMeta, error)
 	Open(id string) (*Snapshot, error)
 	DecodeMeta(b []byte) (SnapshotMeta, error)
+
+	// Trim trims the snapshot store by evicting snapshots with indexes smaller
+	// than the provided index.
+	Trim(index uint64) error
 }
 
 // snapshotScheduler is responsible for triggering snapshot creations under

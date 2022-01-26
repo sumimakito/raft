@@ -13,14 +13,17 @@ const (
 	logStoreBucketConfIndexes = "conf_indexes"
 )
 
+// TODO: Should return errors
 func encodeLog(log *pb.Log) (out []byte) {
 	return raft.Must2(proto.Marshal(log)).([]byte)
 }
 
-func decodeLog(in []byte) *pb.Log {
+func decodeLog(in []byte) (*pb.Log, error) {
 	var pbLog pb.Log
-	proto.Unmarshal(in, &pbLog)
-	return &pbLog
+	if err := proto.Unmarshal(in, &pbLog); err != nil {
+		return nil, err
+	}
+	return &pbLog, nil
 }
 
 // LogStore is a log store that uses bbolt as backend
@@ -86,23 +89,53 @@ func (s *LogStore) AppendLogs(logs []*pb.Log) {
 	}))
 }
 
-func (s *LogStore) DeleteAfter(firstIndex uint64) {
+func (s *LogStore) TrimBefore(index uint64) {
 	raft.Must1(s.db.Update(func(t *bbolt.Tx) error {
 		bucket := t.Bucket([]byte(logStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
 		c := bucket.Cursor()
-		key, value := c.Seek(raft.EncodeUint64(firstIndex))
-		if key == nil {
+		c.Seek(raft.EncodeUint64(index))
+		key, value := c.Prev()
+		for key != nil {
+			log, err := decodeLog(value)
+			if err != nil {
+				return err
+			}
+			if err := s.deleteLogIndex(t, log.Body.Type, raft.DecodeUint64(key)); err != nil {
+				return err
+			}
+			if err := c.Delete(); err != nil {
+				return err
+			}
+			key, value = c.Prev()
+		}
+		return nil
+	}))
+}
+
+func (s *LogStore) TrimAfter(index uint64) {
+	raft.Must1(s.db.Update(func(t *bbolt.Tx) error {
+		bucket := t.Bucket([]byte(logStoreBucketLogs))
+		if bucket == nil {
 			return nil
 		}
-		log := decodeLog(value)
-		if err := s.deleteLogIndex(t, log.Body.Type, raft.DecodeUint64(key)); err != nil {
-			return err
-		}
-		if err := c.Delete(); err != nil {
-			return err
+		c := bucket.Cursor()
+		c.Seek(raft.EncodeUint64(index))
+		key, value := c.Next()
+		for key != nil {
+			log, err := decodeLog(value)
+			if err != nil {
+				return err
+			}
+			if err := s.deleteLogIndex(t, log.Body.Type, raft.DecodeUint64(key)); err != nil {
+				return err
+			}
+			if err := c.Delete(); err != nil {
+				return err
+			}
+			key, value = c.Next()
 		}
 		return nil
 	}))
@@ -150,7 +183,8 @@ func (s *LogStore) Entry(index uint64) (log *pb.Log) {
 		if key == nil {
 			return nil
 		}
-		log = decodeLog(value)
+		// TODO: Should handle this error
+		log, _ = decodeLog(value)
 		return nil
 	}))
 	return
@@ -166,7 +200,7 @@ func (s *LogStore) LastEntry() (log *pb.Log) {
 		if key == nil {
 			return nil
 		}
-		log = decodeLog(value)
+		log, _ = decodeLog(value)
 		return nil
 	}))
 	return
@@ -195,7 +229,7 @@ func (s *LogStore) FirstTypedEntry(t pb.LogType) (log *pb.Log) {
 		if key == nil {
 			return nil
 		}
-		log = decodeLog(value)
+		log, _ = decodeLog(value)
 		return nil
 	}))
 	return
@@ -217,7 +251,7 @@ func (s *LogStore) LastTypedEntry(t pb.LogType) (log *pb.Log) {
 		if key == nil {
 			return nil
 		}
-		log = decodeLog(value)
+		log, _ = decodeLog(value)
 		return nil
 	}))
 	return

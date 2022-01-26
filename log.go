@@ -6,7 +6,14 @@ import (
 
 type LogStore interface {
 	AppendLogs(logs []*pb.Log)
-	DeleteAfter(firstIndex uint64)
+
+	// TrimBefore trims the log store by evicting logs with indexes smaller
+	// than the provided index.
+	TrimBefore(index uint64)
+
+	// TrimAfter trims the log store by evicting logs with indexes bigger
+	// than the provided index.
+	TrimAfter(index uint64)
 
 	FirstIndex() uint64
 	LastIndex() uint64
