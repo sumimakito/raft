@@ -5,25 +5,27 @@ import (
 )
 
 type LogStore interface {
-	AppendLogs(logs []*pb.Log)
+	AppendLogs(logs []*pb.Log) error
 
 	// TrimBefore trims the log store by evicting logs with indexes smaller
 	// than the provided index.
-	TrimBefore(index uint64)
+	TrimBefore(index uint64) error
 
 	// TrimAfter trims the log store by evicting logs with indexes bigger
 	// than the provided index.
-	TrimAfter(index uint64)
+	TrimAfter(index uint64) error
 
-	FirstIndex() uint64
-	LastIndex() uint64
+	FirstIndex() (uint64, error)
+	LastIndex() (uint64, error)
 
-	Entry(index uint64) *pb.Log
-	LastEntry() *pb.Log
-	LastTermIndex() (term uint64, index uint64)
+	Entry(index uint64) (*pb.Log, error)
+	LastEntry() (*pb.Log, error)
 }
 
 type LogStoreTypedFinder interface {
-	FirstTypedEntry(t pb.LogType) *pb.Log
-	LastTypedEntry(t pb.LogType) *pb.Log
+	FirstTypedIndex(t pb.LogType) (uint64, error)
+	LastTypedIndex(t pb.LogType) (uint64, error)
+
+	FirstTypedEntry(t pb.LogType) (*pb.Log, error)
+	LastTypedEntry(t pb.LogType) (*pb.Log, error)
 }

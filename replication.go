@@ -5,11 +5,12 @@ import (
 	"sync"
 
 	"github.com/sumimakito/raft/pb"
+	"go.uber.org/zap"
 )
 
 type replCtl struct {
 	*asyncCtl
-	replID string
+	replId string
 }
 
 type replState struct {
@@ -27,8 +28,6 @@ type replState struct {
 func (s *replState) replicate(ctl *replCtl, resCh chan<- *pb.AppendEntriesResponse) {
 	defer ctl.Release()
 
-	var requestID ObjectID
-	var request *pb.AppendEntriesRequest
 	var lastLogIndex uint64
 
 	goto ENTRY
@@ -43,9 +42,13 @@ WAIT_NEXT:
 
 ENTRY:
 	s.sched.server.logger.Infow("replication/heartbeat started",
-		logFields(s.sched.server, "replication_id", ctl.replID, "peer", s.peer)...)
+		logFields(s.sched.server,
+			zap.String("replication_id", ctl.replId),
+			zap.Object("peer", s.peer))...)
 	defer s.sched.server.logger.Infow("replication/heartbeat stopped",
-		logFields(s.sched.server, "replication_id", ctl.replID, "peer", s.peer)...)
+		logFields(s.sched.server,
+			zap.String("replication_id", ctl.replId),
+			zap.Object("peer", s.peer))...)
 
 	if s.peer.Id == s.sched.server.id {
 	SELF_CHECK_INDEX:
@@ -83,7 +86,9 @@ ENTRY:
 		s.sched.updateMatchIndex(s.peer.Id, lastLogIndex)
 
 		s.sched.server.logger.Infow("self replication state updated",
-			logFields(s.sched.server, "replication_id", ctl.replID, "peer", s.peer)...)
+			logFields(s.sched.server,
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer))...)
 
 		select {
 		case <-ctl.Cancelled():
@@ -100,6 +105,9 @@ CHECK_INDEX:
 	default:
 	}
 
+	var heartbeatRequestId string
+	var heartbeaRequest *pb.AppendEntriesRequest
+
 	lastLogIndex = s.sched.server.lastLogIndex()
 	// Check if there are more entries to replicate.
 	if lastLogIndex >= s.nextIndex {
@@ -107,10 +115,8 @@ CHECK_INDEX:
 	}
 	s.sched.server.logger.Infow("no entries to replicate",
 		logFields(s.sched.server,
-			"replication_id", ctl.replID,
-			"peer", s.peer,
-			"request_id", requestID,
-			"request", request)...)
+			zap.String("replication_id", ctl.replId),
+			zap.Object("peer", s.peer))...)
 
 	select {
 	case <-ctl.Cancelled():
@@ -118,23 +124,23 @@ CHECK_INDEX:
 	default:
 	}
 
-	requestID, request = s.sched.prepareHeartbeat()
+	heartbeatRequestId, heartbeaRequest = s.sched.prepareHeartbeat()
 	s.sched.server.logger.Debugw("send heartbeat request",
 		logFields(s.sched.server,
-			"replication_id", ctl.replID,
-			"peer", s.peer,
-			"request_id", requestID,
-			"request", request)...)
-	if response, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, request); err != nil {
+			zap.String("replication_id", ctl.replId),
+			zap.Object("peer", s.peer),
+			zap.String("request_id", heartbeatRequestId),
+			zap.Reflect("request", heartbeaRequest))...)
+	if heartbeatResponse, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, heartbeaRequest); err != nil {
 		s.sched.server.logger.Infow("error sending heartbeat request",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"request_id", requestID,
-				"request", request,
-				"error", err)...)
+				zap.Error(err),
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("request_id", heartbeatRequestId),
+				zap.Reflect("request", heartbeaRequest))...)
 	} else {
-		resCh <- response
+		resCh <- heartbeatResponse
 	}
 
 	goto WAIT_NEXT
@@ -146,45 +152,55 @@ REPLICATE:
 	default:
 	}
 
-	requestID, request = s.sched.prepareRequest(s.nextIndex, lastLogIndex)
+	replicationRequestId, replicationRequest, err := s.sched.prepareRequest(s.nextIndex, lastLogIndex)
+	if err != nil {
+		s.sched.server.logger.Infow("error preparing replication request",
+			logFields(s.sched.server,
+				zap.Error(err),
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("request_id", replicationRequestId),
+				zap.Reflect("request", replicationRequest))...)
+		goto WAIT_NEXT
+	}
 	s.sched.server.logger.Debugw("send replication request",
 		logFields(s.sched.server,
-			"replication_id", ctl.replID,
-			"peer", s.peer,
-			"request_id", requestID,
-			"request", request)...)
-	response, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, request)
+			zap.String("replication_id", ctl.replId),
+			zap.Object("peer", s.peer),
+			zap.String("request_id", replicationRequestId),
+			zap.Reflect("request", replicationRequest))...)
+	replicationResponse, err := s.sched.server.trans.AppendEntries(ctl.Context(), s.peer, replicationRequest)
 	if err != nil {
 		s.sched.server.logger.Infow("error sending replication request",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"request_id", requestID,
-				"request", request,
-				"error", err)...)
+				zap.Error(err),
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("request_id", replicationRequestId),
+				zap.Reflect("request", replicationRequest))...)
 		goto WAIT_NEXT
 	}
 
-	if response.Success {
+	if replicationResponse.Success {
 		s.sched.server.logger.Debugw("successful replication response",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"request_id", requestID,
-				"response", response)...)
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("request_id", replicationRequestId),
+				zap.Reflect("request", replicationResponse))...)
 		s.nextIndex = lastLogIndex + 1
 		s.sched.updateMatchIndex(s.peer.Id, lastLogIndex)
 	} else {
 		s.sched.server.logger.Debugw("unsuccessful replication repsonse",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"request_id", requestID,
-				"response", response)...)
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("request_id", replicationRequestId),
+				zap.Reflect("request", replicationResponse))...)
 		goto INSTALL_SNAPSHOT
 		// s.nextIndex = s.nextIndex - 1
 	}
-	resCh <- response
+	resCh <- replicationResponse
 
 	goto WAIT_NEXT
 
@@ -197,24 +213,24 @@ INSTALL_SNAPSHOT:
 
 	s.sched.server.logger.Infow("ready to install snapshot",
 		logFields(s.sched.server,
-			"replication_id", ctl.replID,
-			"peer", s.peer)...)
+			zap.String("replication_id", ctl.replId),
+			zap.Object("peer", s.peer))...)
 
 	metadataList, err := s.sched.server.snapshot.List()
 	if err != nil {
 		s.sched.server.logger.Infow("error listing snapshots",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"error", err)...)
+				zap.Error(err),
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer))...)
 		goto WAIT_NEXT
 	}
 
 	if len(metadataList) == 0 {
 		s.sched.server.logger.Infow("no snapshots to install",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer)...)
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer))...)
 		goto WAIT_NEXT
 	}
 
@@ -222,10 +238,10 @@ INSTALL_SNAPSHOT:
 	if err != nil {
 		s.sched.server.logger.Infow("error opening snapshot",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"snapshot_id", snapshot.Meta.Id(),
-				"error", err)...)
+				zap.Error(err),
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("snapshot_id", snapshot.Meta.Id()))...)
 		goto WAIT_NEXT
 	}
 
@@ -233,10 +249,10 @@ INSTALL_SNAPSHOT:
 	if err != nil {
 		s.sched.server.logger.Infow("error encoding snapshot metadata",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"snapshot_id", snapshot.Meta.Id(),
-				"error", err)...)
+				zap.Error(err),
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("snapshot_id", snapshot.Meta.Id()))...)
 		goto WAIT_NEXT
 	}
 
@@ -251,18 +267,18 @@ INSTALL_SNAPSHOT:
 	if _, err := s.sched.server.trans.InstallSnapshot(ctl.Context(), s.peer, requestMeta, snapshot.Reader); err != nil {
 		s.sched.server.logger.Infow("error installing snapshot",
 			logFields(s.sched.server,
-				"replication_id", ctl.replID,
-				"peer", s.peer,
-				"snapshot_id", snapshot.Meta.Id(),
-				"error", err)...)
+				zap.Error(err),
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.String("snapshot_id", snapshot.Meta.Id()))...)
 		goto WAIT_NEXT
 	}
 
 	s.sched.server.logger.Infow("snapshot installed",
 		logFields(s.sched.server,
-			"replication_id", ctl.replID,
-			"peer", s.peer,
-			"snapshot_id", snapshot.Meta.Id())...)
+			zap.String("replication_id", ctl.replId),
+			zap.Object("peer", s.peer),
+			zap.String("snapshot_id", snapshot.Meta.Id()))...)
 
 	goto WAIT_NEXT
 }
@@ -275,7 +291,7 @@ func (s *replState) Replicate(replID string, resCh chan<- *pb.AppendEntriesRespo
 		s.sched.server.logger.Panic("attempt to reuse a stopped replState")
 	}
 
-	newCtl := &replCtl{asyncCtl: newAsyncCtl(), replID: replID}
+	newCtl := &replCtl{asyncCtl: newAsyncCtl(), replId: replID}
 	oldCtl := s.ctl
 	s.ctl = newCtl
 	if oldCtl != nil {
@@ -315,8 +331,8 @@ func newReplScheduler(server *Server) *replScheduler {
 	}
 }
 
-func (r *replScheduler) prepareHeartbeat() (ObjectID, *pb.AppendEntriesRequest) {
-	return NewObjectID(), &pb.AppendEntriesRequest{
+func (r *replScheduler) prepareHeartbeat() (string, *pb.AppendEntriesRequest) {
+	return NewObjectID().Hex(), &pb.AppendEntriesRequest{
 		Term:         r.server.currentTerm(),
 		LeaderId:     r.server.id,
 		LeaderCommit: r.server.commitIndex(),
@@ -326,8 +342,8 @@ func (r *replScheduler) prepareHeartbeat() (ObjectID, *pb.AppendEntriesRequest) 
 	}
 }
 
-func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (ObjectID, *pb.AppendEntriesRequest) {
-	requestID := NewObjectID()
+func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (string, *pb.AppendEntriesRequest, error) {
+	requestId := NewObjectID().Hex()
 
 	request := &pb.AppendEntriesRequest{
 		Term:         r.server.currentTerm(),
@@ -339,22 +355,31 @@ func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (ObjectID, 
 	}
 
 	if prevLogIndex := firstIndex - 1; prevLogIndex > 0 {
-		log := r.server.logStore.Entry(prevLogIndex)
-		request.PrevLogTerm = log.Meta.Term
-		request.PrevLogIndex = log.Meta.Index
+		log, err := r.server.logStore.Entry(prevLogIndex)
+		if err != nil {
+			return "", nil, err
+		}
+		if log != nil {
+			request.PrevLogTerm = log.Meta.Term
+			request.PrevLogIndex = log.Meta.Index
+		}
 	}
 
 	lastLogIndex := r.server.lastLogIndex()
 	if firstIndex > lastLogIndex || (firstIndex == lastLogIndex && firstIndex == 0) {
-		return requestID, request
+		return requestId, request, nil
 	}
 
 	request.Entries = make([]*pb.Log, 0, lastLogIndex-firstIndex+1)
 	for i := firstIndex; i <= lastLogIndex; i++ {
-		request.Entries = append(request.Entries, r.server.logStore.Entry(i).Copy())
+		e, err := r.server.logStore.Entry(i)
+		if err != nil {
+			return "", nil, nil
+		}
+		request.Entries = append(request.Entries, e.Copy())
 	}
 
-	return requestID, request
+	return requestId, request, nil
 }
 
 func (r *replScheduler) updateMatchIndex(serverID string, matchIndex uint64) {

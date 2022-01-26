@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/sumimakito/raft/pb"
+	"go.uber.org/zap"
 )
 
 type RPC struct {
@@ -83,7 +84,10 @@ func (h *rpcHandler) AppendEntries(
 	}
 
 	if request.PrevLogIndex > 0 {
-		requestPrevLog := h.server.logStore.Entry(request.PrevLogIndex)
+		requestPrevLog, err := h.server.logStore.Entry(request.PrevLogIndex)
+		if err != nil {
+			return nil, err
+		}
 		if requestPrevLog == nil || request.PrevLogTerm != requestPrevLog.Meta.Term {
 			h.server.logger.Infow("incoming previous log does not exist or has a different term",
 				logFields(h.server, "request_id", requestID, "request", request)...)
@@ -100,15 +104,22 @@ func (h *rpcHandler) AppendEntries(
 				if e.Meta.Index > lastLogIndex {
 					break
 				}
-				log := h.server.logStore.Entry(e.Meta.Index)
-				if log.Meta.Term != e.Meta.Term {
+				log, err := h.server.logStore.Entry(e.Meta.Index)
+				if err != nil {
+					return nil, err
+				}
+				var logTerm uint64
+				if log != nil {
+					logTerm = log.Meta.Term
+				}
+				if logTerm != e.Meta.Term {
 					firstCleanUpIndex = log.Meta.Index
 					break
 				}
 				firstAppendArrayIndex = i + 1
 			}
 			if firstCleanUpIndex > 0 {
-				h.server.logStore.DeleteAfter(firstCleanUpIndex)
+				h.server.logStore.TrimAfter(firstCleanUpIndex - 1)
 			}
 		}
 		bodies := make([]*pb.LogBody, 0, len(request.Entries)-firstAppendArrayIndex)
@@ -166,7 +177,18 @@ func (h *rpcHandler) RequestVote(
 		response.Term = h.server.currentTerm()
 	}
 
-	lastTerm, lastIndex := h.server.logStore.LastTermIndex()
+	lastLog, err := h.server.logStore.LastEntry()
+	if err != nil {
+		return nil, err
+	}
+
+	var lastIndex uint64
+	var lastTerm uint64
+
+	if lastLog != nil {
+		lastIndex = lastLog.Meta.Index
+		lastTerm = lastLog.Meta.Term
+	}
 
 	// Check if candidate's term of the last log is stale.
 	if request.LastLogTerm < lastTerm {
@@ -195,6 +217,13 @@ func (h *rpcHandler) InstallSnapshot(
 	h.server.logger.Infow("incoming RPC: InstallSnapshot",
 		logFields(h.server, "request_id", requestID, "request", request)...)
 
+	response := &pb.InstallSnapshotResponse{Term: h.server.currentTerm()}
+
+	if request.Metadata.Term < h.server.currentTerm() {
+		h.server.logger.Debugw("incoming term is stale", logFields(h.server, "request_id", requestID)...)
+		return response, nil
+	}
+
 	snapshotMeta, err := h.server.snapshot.DecodeMeta(request.Metadata.SnapshotMetadata)
 	if err != nil {
 		return nil, err
@@ -214,7 +243,14 @@ func (h *rpcHandler) InstallSnapshot(
 		return nil, err
 	}
 
-	return &pb.InstallSnapshotResponse{Term: h.server.currentTerm()}, nil
+	go func() {
+		if err := h.server.snapshot.Trim(snapshotMeta.Index()); err != nil {
+			h.server.logger.Warnw("error calling Trim() on SnapshotStore",
+				logFields(h.server, zap.String("request_id", requestID), zap.Error(err))...)
+		}
+	}()
+
+	return response, nil
 }
 
 func (h *rpcHandler) ApplyLog(ctx context.Context, requestID string, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {

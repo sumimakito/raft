@@ -99,7 +99,7 @@ func main() {
 	kvsm := NewKVSM()
 	snapshot := NewSnapshotStore(snapshotDir)
 
-	server := raft.NewServer(
+	server, err := raft.NewServer(
 		raft.ServerCoreOptions{
 			ID:           serverID,
 			Log:          logStore,

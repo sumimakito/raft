@@ -40,10 +40,15 @@ type serverState struct {
 	stateShutdownState   uint32       // volatile
 }
 
-func (s *Server) restoreStates() {
+func (s *Server) restoreStates() error {
 	atomic.StoreUint64(&s.serverState.stateCurrentTerm, Must2(s.stable.CurrentTerm()).(uint64))
-	atomic.StoreUint64(&s.serverState.stateLastLogIndex, s.logStore.LastIndex())
+	if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
+		return err
+	} else {
+		atomic.StoreUint64(&s.serverState.stateLastLogIndex, lastLogIndex)
+	}
 	s.serverState.stateLastVoteSummary.Store(Must2(s.stable.LastVote()).(voteSummary))
+	return nil
 }
 
 func (s *Server) role() ServerRole {

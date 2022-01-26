@@ -6,6 +6,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+var NilLog = &Log{Meta: &LogMeta{Index: 0, Term: 0}}
+
 func (m *LogMeta) Copy() *LogMeta {
 	return &LogMeta{
 		Index: m.Index,

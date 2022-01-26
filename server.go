@@ -78,7 +78,7 @@ type Server struct {
 
 	serverChannels
 
-	confStore     configurationStore
+	confStore     *configurationStore
 	stateMachine  *stateMachineAdapter
 	rpcHandler    *rpcHandler
 	repl          *replScheduler
@@ -93,7 +93,7 @@ type Server struct {
 	shutdownOnce sync.Once
 }
 
-func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
+func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error) {
 	server := &Server{
 		id:          coreOpts.ID,
 		serverState: serverState{stateRole: Follower},
@@ -118,16 +118,22 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) *Server {
 	go func() { <-terminalSignalCh(); _ = server.logger.Sync() }()
 
 	server.stable = newStableStore(server)
-	server.restoreStates()
+	if err := server.restoreStates(); err != nil {
+		return nil, err
+	}
 
 	server.apiServer = newAPIServer(server, server.opts.apiExtensions...)
-	server.confStore = newConfigurationStore(server)
+	if confStore, err := newConfigurationStore(server); err != nil {
+		return nil, err
+	} else {
+		server.confStore = confStore
+	}
 	server.repl = newReplScheduler(server)
 	server.snapshotSched = newSnapshotScheduler(server)
 	server.rpcHandler = newRPCHandler(server)
 	server.stateMachine = newStateMachineAdapter(server, coreOpts.StateMachine)
 
-	return server
+	return server, nil
 }
 
 func (s *Server) alterCommitIndex(commitIndex uint64) {
@@ -167,11 +173,11 @@ func (s *Server) stepdownFollower(leader *pb.Peer) {
 // appendLogs submits the logs to the log store and updates the index states.
 // NOT safe for concurrent use.
 // Should be used by non-leader servers.
-func (s *Server) appendLogs(bodies []*pb.LogBody) {
-	lastLogIndex := s.logStore.LastIndex()
+func (s *Server) appendLogs(bodies []*pb.LogBody) error {
+	lastLogIndex := s.lastLogIndex()
 	term := s.currentTerm()
-	lastCfgArrayIndex := len(bodies)
 	logs := make([]*pb.Log, len(bodies))
+	lastCfgArrayIndex := len(logs)
 	for i, body := range bodies {
 		logs[i] = &pb.Log{
 			Meta: &pb.LogMeta{
@@ -185,15 +191,22 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) {
 		}
 	}
 	s.logStore.AppendLogs(logs)
-	s.setLastLogIndex(s.logStore.LastIndex())
+	if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
+		return err
+	} else {
+		s.setLastLogIndex(lastLogIndex)
+	}
 	if lastCfgArrayIndex < len(logs) {
 		log := logs[lastCfgArrayIndex]
 		var pbConfiguration pb.Configuration
-		Must1(proto.Unmarshal(log.Body.Data, &pbConfiguration))
+		if err := proto.Unmarshal(log.Body.Data, &pbConfiguration); err != nil {
+			return err
+		}
 		c := newConfiguration(&pbConfiguration)
 		c.logIndex = log.Meta.Index
 		s.confCh <- c
 	}
+	return nil
 }
 
 func (s *Server) handleRPC(rpc *RPC) {
@@ -285,25 +298,41 @@ func (s *Server) runLoopLeader() {
 			body := t.Task()
 			log := &pb.Log{
 				Meta: &pb.LogMeta{
-					Index: s.logStore.LastIndex() + 1,
+					Index: s.lastLogIndex() + 1,
 					Term:  s.currentTerm(),
 				},
 				Body: body.Copy(),
 			}
 			if log.Body.Type == pb.LogType_CONFIGURATION {
 				var pbConfiguration pb.Configuration
-				Must1(proto.Unmarshal(log.Body.Data, &pbConfiguration))
+				if err := proto.Unmarshal(log.Body.Data, &pbConfiguration); err != nil {
+					t.setResult(nil, err)
+					break
+				}
 				c := newConfiguration(&pbConfiguration)
 				c.logIndex = log.Meta.Index
 				s.repl.Stop()
 				s.logStore.AppendLogs([]*pb.Log{log})
-				s.setLastLogIndex(s.logStore.LastIndex())
+				if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
+					t.setResult(nil, err)
+					break
+				} else {
+					s.setLastLogIndex(lastLogIndex)
+				}
 				s.alterConfiguration(c)
 				t.setResult(log.Meta, nil)
 				return
 			}
-			s.logStore.AppendLogs([]*pb.Log{log})
-			s.setLastLogIndex(s.logStore.LastIndex())
+			if err := s.logStore.AppendLogs([]*pb.Log{log}); err != nil {
+				t.setResult(nil, err)
+				break
+			}
+			if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
+				t.setResult(nil, err)
+				break
+			} else {
+				s.setLastLogIndex(lastLogIndex)
+			}
 			t.setResult(log.Meta, nil)
 		case commitIndex := <-s.commitCh:
 			s.updateCommitIndex(commitIndex)
@@ -322,8 +351,11 @@ func (s *Server) runLoopCandidate() {
 	s.logger.Infow("run candidate loop", logFields(s)...)
 
 	electionTimer := s.randomTimer(s.opts.electionTimeout)
-	voteResCh, voteCancel := s.startElection()
+	voteResCh, voteCancel, err := s.startElection()
 	defer voteCancel()
+	if err != nil {
+		s.logger.Panicw("error occurred starting the election", logFields(s, zap.Error(err))...)
+	}
 
 	currentVotes := 0
 	nextVotes := 0
@@ -427,7 +459,7 @@ func (s *Server) serveAPIServer() {
 	}
 }
 
-func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.CancelFunc) {
+func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.CancelFunc, error) {
 	s.logger.Infow("ready to start the election", logFields(s)...)
 	s.alterTerm(s.currentTerm() + 1)
 	s.setLastVoteSummary(s.currentTerm(), s.id)
@@ -438,7 +470,18 @@ func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.Cancel
 	c := s.confStore.Latest()
 	resCh := make(chan *pb.RequestVoteResponse, len(c.Peers()))
 
-	lastTerm, lastIndex := s.logStore.LastTermIndex()
+	var lastIndex uint64
+	var lastTerm uint64
+
+	log, err := s.logStore.LastEntry()
+	if err != nil {
+		voteCancel()
+		return nil, nil, err
+	}
+	if log != nil {
+		lastIndex = log.Meta.Index
+		lastTerm = log.Meta.Term
+	}
 
 	request := &pb.RequestVoteRequest{
 		Term:         s.currentTerm(),
@@ -465,7 +508,7 @@ func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.Cancel
 
 	resCh <- &pb.RequestVoteResponse{ServerId: s.id, Term: s.currentTerm(), Granted: true}
 
-	return resCh, voteCancel
+	return resCh, voteCancel, nil
 }
 
 func (s *Server) startMetrics(exporter MetricsExporter) {
@@ -490,7 +533,7 @@ func (s *Server) updateCommitIndex(commitIndex uint64) {
 	firstIndex := lastAppliedIndex + 1
 	s.logger.Infow("ready to apply logs", logFields(s, "first_index", firstIndex, "last_index", commitIndex)...)
 	for i := firstIndex; i <= commitIndex; i++ {
-		log := s.logStore.Entry(i)
+		log := Must2(s.logStore.Entry(i)).(*pb.Log)
 		if log == nil {
 			// We've found one or more gaps in the logs
 			s.logger.Panicw("one or more log gaps are detected", logFields(s, "missing_index", i)...)
