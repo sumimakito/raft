@@ -12,15 +12,8 @@ import (
 	"time"
 )
 
-// anyPtr accepts a value and returns a typed pointer that
-// points to the value.
-func AnyPtr(i interface{}) interface{} {
-	// Extract the type of i and create a pointer.
-	v := reflect.New(reflect.ValueOf(i).Type())
-	// Let the pointer point to i.
-	v.Elem().Set(reflect.ValueOf(i))
-	// Returns the pointer. (actually *T)
-	return v.Interface()
+func Ptr[T any](v T) *T {
+	return &v
 }
 
 func Must1(err error) {
@@ -29,18 +22,11 @@ func Must1(err error) {
 	}
 }
 
-func Must2(vals ...interface{}) interface{} {
-	if len(vals) != 2 {
-		log.Panic("Must2 requires exactly two parameters")
-	}
-	if vals[1] != nil {
-		err, ok := vals[1].(error)
-		if !ok {
-			log.Panic("Must2 requires the second parameter to be an error")
-		}
+func Must2[T any](result T, err error) T {
+	if err != nil {
 		log.Panic(err)
 	}
-	return vals[0]
+	return result
 }
 
 func Zero(v interface{}) {
