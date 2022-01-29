@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -97,6 +98,94 @@ func (w *BufferedWriteCloser) Flush() error {
 
 func (w *BufferedWriteCloser) Write(p []byte) (n int, err error) {
 	return w.writer.Write(p)
+}
+
+type CounterTimer struct {
+	mu       sync.Mutex
+	counts   int
+	interval time.Duration
+
+	counter  int
+	counterC chan struct{}
+	ticker   *time.Ticker
+
+	stopCh chan struct{}
+
+	c chan struct{}
+}
+
+func NewCounterTimer(counts int, interval time.Duration) *CounterTimer {
+	if counts < 0 {
+		panic("counts < 0")
+	}
+	if interval < 0 {
+		panic("interval < 0")
+	}
+	if counts == 0 && interval == 0 {
+		panic("counts == 0 && interval == 0")
+	}
+	t := &CounterTimer{counts: counts, interval: interval, stopCh: make(chan struct{}), c: make(chan struct{})}
+	if counts > 0 {
+		t.counterC = make(chan struct{})
+	}
+	go func() {
+		var tickerCh <-chan time.Time
+		if interval > 0 {
+			t.ticker = time.NewTicker(interval)
+			tickerCh = t.ticker.C
+		}
+		for {
+			select {
+			case <-tickerCh:
+				t.ticker.Reset(interval)
+				t.mu.Lock()
+				t.counter = 0
+				t.mu.Unlock()
+				t.c <- struct{}{}
+			case <-t.counterC:
+				t.ticker.Reset(interval)
+				t.mu.Lock()
+				t.counter = 0
+				t.mu.Unlock()
+				t.c <- struct{}{}
+			case <-t.stopCh:
+				t.ticker.Stop()
+				return
+			}
+		}
+	}()
+	return t
+}
+
+func (t *CounterTimer) C() <-chan struct{} {
+	return t.c
+}
+
+func (t *CounterTimer) Count() {
+	if t.counts <= 0 {
+		panic("the CounterTimer does not have counts set")
+	}
+	t.mu.Lock()
+	t.counter += 1
+	if t.counter < t.counts {
+		t.mu.Unlock()
+		return
+	}
+	t.counter = 0
+	t.mu.Unlock()
+	select {
+	case t.counterC <- struct{}{}:
+	default:
+	}
+	return
+}
+
+func (t *CounterTimer) Stop() {
+	close(t.stopCh)
+}
+
+func (t *CounterTimer) StopC() <-chan struct{} {
+	return t.stopCh
 }
 
 // CappedSlice is a ring buffer like slice which holds a maximum of `cap` items.
