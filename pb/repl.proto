@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+option go_package = "github.com/sumimakito/raft/pb";
+
+package pb;
+
+enum ReplStatus {
+  REPL_UNKNOWN = 0;
+  REPL_OK = 1;
+  REPL_ERR_NO_LOG = 2;
+  REPL_ERR_STALE_TERM = 3;
+  REPL_ERR_INTERNAL = 4;
+}
