@@ -61,6 +61,12 @@ func ElectionTimeoutOption(timeout time.Duration) ServerOption {
 	}
 }
 
+func FollowerTimeoutOption(timeout time.Duration) ServerOption {
+	return func(options *serverOptions) {
+		options.followerTimeout = timeout
+	}
+}
+
 func MetricsKeeperOption(exporter MetricsExporter) ServerOption {
 	return func(options *serverOptions) {
 		options.metricsExporter = exporter
