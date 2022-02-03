@@ -29,8 +29,15 @@ func wrappedServerLogger(logLevel zapcore.Level) *zap.SugaredLogger {
 	consoleStdout := zapcore.Lock(os.Stdout)
 	consoleStderr := zapcore.Lock(os.Stderr)
 
-	// jsonEncoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-	consoleEncoder := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
+	prodEncoderConfig := zap.NewProductionEncoderConfig()
+	develEncoderConfig := zap.NewDevelopmentEncoderConfig()
+	develEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+
+	jsonEncoder := zapcore.NewJSONEncoder(prodEncoderConfig)
+	consoleEncoder := zapcore.NewConsoleEncoder(develEncoderConfig)
+
+	_ = jsonEncoder
+	// zapcore.AddSync(colorable.NewColorableStdout()),
 
 	core := zapcore.NewTee(
 		zapcore.NewCore(consoleEncoder, consoleStdout, lowPriority),
