@@ -60,11 +60,12 @@ func (h *rpcHandler) AppendEntries(
 	response := &pb.AppendEntriesResponse{
 		ServerId: h.server.id,
 		Term:     h.server.currentTerm(),
-		Success:  false,
+		Status:   pb.ReplStatus_REPL_UNKNOWN,
 	}
 
 	if request.Term < h.server.currentTerm() {
 		h.server.logger.Debugw("incoming term is stale", logFields(h.server, "request_id", requestID)...)
+		response.Status = pb.ReplStatus_REPL_ERR_STALE_TERM
 		return response, nil
 	}
 
@@ -91,6 +92,7 @@ func (h *rpcHandler) AppendEntries(
 		if requestPrevLog == nil || request.PrevLogTerm != requestPrevLog.Meta.Term {
 			h.server.logger.Infow("incoming previous log does not exist or has a different term",
 				logFields(h.server, "request_id", requestID, "request", request)...)
+			response.Status = pb.ReplStatus_REPL_ERR_NO_LOG
 			return response, nil
 		}
 	}
@@ -135,7 +137,7 @@ func (h *rpcHandler) AppendEntries(
 		h.server.alterCommitIndex(request.LeaderCommit)
 	}
 
-	response.Success = true
+	response.Status = pb.ReplStatus_REPL_OK
 	return response, nil
 }
 
