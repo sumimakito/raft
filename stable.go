@@ -21,7 +21,7 @@ type stableStore struct {
 func newStableStore(server *Server) *stableStore {
 	return &stableStore{
 		server: server,
-		db:     Must2(bbolt.Open(server.opts.stableStorePath, 0600, nil)).(*bbolt.DB),
+		db:     Must2(bbolt.Open(server.opts.stableStorePath, 0600, nil)),
 	}
 }
 
