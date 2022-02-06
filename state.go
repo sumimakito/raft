@@ -35,19 +35,17 @@ type serverState struct {
 
 	stateRole            ServerRole   // volatile
 	stateCurrentTerm     uint64       // persistent
+	stateFirstLogIndex   uint64       // volatile
 	stateLastLogIndex    uint64       // volatile
 	stateLastVoteSummary atomic.Value // voteSummary persistent
 	stateShutdownState   uint32       // volatile
 }
 
 func (s *Server) restoreStates() error {
-	atomic.StoreUint64(&s.serverState.stateCurrentTerm, Must2(s.stable.CurrentTerm()).(uint64))
-	if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
-		return err
-	} else {
-		atomic.StoreUint64(&s.serverState.stateLastLogIndex, lastLogIndex)
-	}
-	s.serverState.stateLastVoteSummary.Store(Must2(s.stable.LastVote()).(voteSummary))
+	atomic.StoreUint64(&s.serverState.stateCurrentTerm, Must2(s.stable.CurrentTerm()))
+	atomic.StoreUint64(&s.serverState.stateFirstLogIndex, Must2(s.logProvider.FirstIndex()))
+	atomic.StoreUint64(&s.serverState.stateLastLogIndex, Must2(s.logProvider.LastIndex()))
+	s.serverState.stateLastVoteSummary.Store(Must2(s.stable.LastVote()))
 	return nil
 }
 
@@ -66,6 +64,14 @@ func (s *Server) currentTerm() uint64 {
 func (s *Server) setCurrentTerm(currentTerm uint64) {
 	Must1(s.stable.SetCurrentTerm(currentTerm))
 	atomic.StoreUint64(&s.serverState.stateCurrentTerm, currentTerm)
+}
+
+func (s *Server) firstLogIndex() uint64 {
+	return atomic.LoadUint64(&s.serverState.stateFirstLogIndex)
+}
+
+func (s *Server) setFirstLogIndex(firstLogIndex uint64) {
+	atomic.StoreUint64(&s.serverState.stateFirstLogIndex, firstLogIndex)
 }
 
 func (s *Server) lastLogIndex() uint64 {
