@@ -34,34 +34,36 @@ type ServerStates struct {
 }
 
 type ServerCoreOptions struct {
-	ID           string
-	Log          LogStore
-	StateMachine StateMachine
-	Snapshot     SnapshotStore
-	Transport    Transport
+	Id               string
+	LogProvider      LogProvider
+	StateMachine     StateMachine
+	SnapshotProvider SnapshotProvider
+	Transport        Transport
 }
+
+type serverStepdownChan chan uint64
 
 type serverChannels struct {
 	noCopy
-	bootstrapCh chan FutureTask[any, any]
 
-	// confCh receives updates on the configuration.
-	// Should be used only by the leader.
 	confCh chan *Configuration
 
-	rpcCh chan *RPC
-
-	// applyLogCh receives log applying requests.
-	// Non-leader servers should redirect this request to the leader.
-	applyLogCh chan FutureTask[*pb.LogMeta, *pb.LogBody]
+	// appendLogsCh chan FutureTask[[]*pb.LogMeta, []*pb.LogBody]
 
 	// commitCh receives updates on the commit index.
 	commitCh chan uint64
 
-	snapshotCh chan FutureTask[any, any]
+	logOpsCh chan logProviderOp
 
-	shutdownCh chan error
+	rpcCh chan *RPC
+
 	serveErrCh chan error
+	shutdownCh chan error
+
+	snapshotRestoreCh chan FutureTask[bool, string]
+
+	// stateMachineSnapshotCh is used to trigger a snapshot on the state machine.
+	stateMachineSnapshotCh chan FutureTask[StateMachineSnapshot, any]
 }
 
 type Server struct {
@@ -78,13 +80,17 @@ type Server struct {
 
 	serverChannels
 
-	confStore     *configurationStore
-	stateMachine  *stateMachineAdapter
-	rpcHandler    *rpcHandler
-	repl          *replScheduler
-	snapshotSched *snapshotScheduler
+	confStore       *configurationStore
+	stateMachine    *stateMachineProxy
+	rpcHandler      *rpcHandler
+	replScheduler   *replScheduler
+	snapshotService *snapshotService
 
 	apiServer *apiServer
+
+	logProvider      *logProviderProxy
+	snapshotProvider SnapshotProvider
+	trans            Transport
 
 	// flagReselectLoop is a flag used by current loop to exit and re-select a loop to enter.
 	flagReselectLoop uint32
@@ -94,28 +100,28 @@ type Server struct {
 
 func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error) {
 	server := &Server{
-		id:          coreOpts.ID,
+		id:          coreOpts.Id,
 		serverState: serverState{stateRole: Follower},
 		commitState: commitState{},
 		serverChannels: serverChannels{
-			bootstrapCh: make(chan FutureTask[any, any], 1),
-			confCh:      make(chan *Configuration, 16),
-			rpcCh:       make(chan *RPC, 16),
-			applyLogCh:  make(chan FutureTask[*pb.LogMeta, *pb.LogBody], 16),
-			commitCh:    make(chan uint64, 16),
-			snapshotCh:  make(chan FutureTask[any, any], 16),
-			shutdownCh:  make(chan error, 8),
-			serveErrCh:  make(chan error, 8),
+			confCh:                 make(chan *Configuration, 16),
+			commitCh:               make(chan uint64, 16),
+			logOpsCh:               make(chan logProviderOp, 64),
+			rpcCh:                  make(chan *RPC, 16),
+			serveErrCh:             make(chan error, 8),
+			shutdownCh:             make(chan error, 8),
+			snapshotRestoreCh:      make(chan FutureTask[bool, string], 8),
+			stateMachineSnapshotCh: make(chan FutureTask[StateMachineSnapshot, any], 16),
 		},
-		logStore: coreOpts.Log,
-		trans:    coreOpts.Transport,
-		snapshot: coreOpts.Snapshot,
-		opts:     applyServerOpts(opts...),
+		trans:            coreOpts.Transport,
+		snapshotProvider: coreOpts.SnapshotProvider,
+		opts:             applyServerOpts(opts...),
 	}
 	// Set up the logger
 	server.logger = wrappedServerLogger(server.opts.logLevel)
 	go func() { <-terminalSignalCh(); _ = server.logger.Sync() }()
 
+	server.logProvider = newLogProviderProxy(server, coreOpts.LogProvider)
 	server.stable = newStableStore(server)
 	if err := server.restoreStates(); err != nil {
 		return nil, err
@@ -127,10 +133,10 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 	} else {
 		server.confStore = confStore
 	}
-	server.repl = newReplScheduler(server)
-	server.snapshotSched = newSnapshotScheduler(server)
+	server.replScheduler = newReplScheduler(server)
+	server.snapshotService = newSnapshotService(server)
 	server.rpcHandler = newRPCHandler(server)
-	server.stateMachine = newStateMachineAdapter(server, coreOpts.StateMachine)
+	server.stateMachine = newStateMachineProxy(server, coreOpts.StateMachine)
 
 	return server, nil
 }
@@ -172,40 +178,55 @@ func (s *Server) stepdownFollower(leader *pb.Peer) {
 // appendLogs submits the logs to the log store and updates the index states.
 // NOT safe for concurrent use.
 // Should be used by non-leader servers.
-func (s *Server) appendLogs(bodies []*pb.LogBody) error {
+func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
 	lastLogIndex := s.lastLogIndex()
 	term := s.currentTerm()
 	logs := make([]*pb.Log, len(bodies))
-	lastCfgArrayIndex := len(logs)
+	logMeta := make([]*pb.LogMeta, len(bodies))
+	lastConfArrayIndex := len(logs)
+
 	for i, body := range bodies {
-		logs[i] = &pb.Log{
+		log := &pb.Log{
 			Meta: &pb.LogMeta{
 				Index: lastLogIndex + 1 + uint64(i),
 				Term:  term,
 			},
 			Body: body.Copy(),
 		}
+		logs[i] = log
+		logMeta[i] = log.Meta
 		if logs[i].Body.Type == pb.LogType_CONFIGURATION {
-			lastCfgArrayIndex = i
+			lastConfArrayIndex = i
 		}
 	}
-	s.logStore.AppendLogs(logs)
-	if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
-		return err
-	} else {
-		s.setLastLogIndex(lastLogIndex)
-	}
-	if lastCfgArrayIndex < len(logs) {
-		log := logs[lastCfgArrayIndex]
+
+	var conf *Configuration
+	if lastConfArrayIndex < len(logs) {
+		log := logs[lastConfArrayIndex]
 		var pbConfiguration pb.Configuration
 		if err := proto.Unmarshal(log.Body.Data, &pbConfiguration); err != nil {
-			return err
+			// Errors here are not fatal
+			return nil, err
 		}
-		c := newConfiguration(&pbConfiguration)
-		c.logIndex = log.Meta.Index
-		s.confCh <- c
+		conf = newConfiguration(&pbConfiguration)
+		conf.logIndex = log.Meta.Index
 	}
-	return nil
+
+	if err := s.logProvider.AppendLogs(logs); err != nil {
+		return nil, err
+	}
+
+	// Logs have been appended now.
+	// Failure to update the index will cause a panic.
+	s.setFirstLogIndex(Must2(s.logProvider.FirstIndex()))
+	s.setLastLogIndex(Must2(s.logProvider.LastIndex()))
+
+	// Special process is necessary if configuration logs are discovered.
+	if conf != nil {
+		s.alterConfiguration(conf)
+		s.reselectLoop()
+	}
+	return logMeta, nil
 }
 
 func (s *Server) handleRPC(rpc *RPC) {
@@ -216,6 +237,9 @@ func (s *Server) handleRPC(rpc *RPC) {
 		rpc.Respond(s.rpcHandler.RequestVote(rpc.Context(), rpc.requestID, request))
 	case *InstallSnapshotRequest:
 		rpc.Respond(s.rpcHandler.InstallSnapshot(rpc.Context(), rpc.requestID, request))
+		if _, err := rpc.Response(); err != nil {
+			panic(err)
+		}
 	case *pb.ApplyLogRequest:
 		rpc.Respond(s.rpcHandler.ApplyLog(rpc.Context(), rpc.requestID, request))
 	default:
@@ -237,7 +261,7 @@ func (s *Server) internalShutdown(err error) {
 	if err := s.apiServer.Stop(); err != nil {
 		s.logger.Warnw("error occurred stopping the API server", logFields(s, zap.Error(err))...)
 	}
-	s.snapshotSched.Stop()
+	s.snapshotService.Stop()
 	// Close the Transport
 	if closer, ok := s.trans.(TransportCloser); ok {
 		closer.Close()
@@ -278,6 +302,7 @@ func (s *Server) runBootstrap(futureTask FutureTask[any, any]) {
 
 func (s *Server) runMainLoop() {
 	for !s.shutdownState() {
+		s.resetReselectLoop()
 		switch s.role() {
 		case Leader:
 			s.runLoopLeader()
@@ -291,68 +316,55 @@ func (s *Server) runMainLoop() {
 
 func (s *Server) runLoopLeader() {
 	s.logger.Infow("run leader loop", logFields(s)...)
-	replResCh := s.repl.Start()
-	defer s.repl.Stop()
+
+	// stepdownCh is used when the local term is found stale.
+	stepdownCh := make(chan uint64, 1)
+
+	s.snapshotService.StartScheduler()
+	defer s.snapshotService.StopScheduler()
+
+	s.replScheduler.Start(stepdownCh)
+	defer s.replScheduler.Stop()
 
 	for s.role() == Leader {
 		select {
-		case response := <-replResCh:
-			if response.Term > s.currentTerm() {
-				// We'll update the leader in other loops
-				s.stepdownFollower(nilPeer)
-				s.alterTerm(response.Term)
-				return
-			}
-		case t := <-s.bootstrapCh:
-			t.setResult(nil, ErrNonFollower)
-		case t := <-s.applyLogCh:
-			body := t.Task()
-			log := &pb.Log{
-				Meta: &pb.LogMeta{
-					Index: s.lastLogIndex() + 1,
-					Term:  s.currentTerm(),
-				},
-				Body: body.Copy(),
-			}
-			if log.Body.Type == pb.LogType_CONFIGURATION {
-				var pbConfiguration pb.Configuration
-				if err := proto.Unmarshal(log.Body.Data, &pbConfiguration); err != nil {
-					t.setResult(nil, err)
-					break
-				}
-				c := newConfiguration(&pbConfiguration)
-				c.logIndex = log.Meta.Index
-				s.repl.Stop()
-				s.logStore.AppendLogs([]*pb.Log{log})
-				if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
-					t.setResult(nil, err)
-					break
-				} else {
-					s.setLastLogIndex(lastLogIndex)
-				}
-				s.alterConfiguration(c)
-				t.setResult(log.Meta, nil)
-				return
-			}
-			if err := s.logStore.AppendLogs([]*pb.Log{log}); err != nil {
-				t.setResult(nil, err)
-				break
-			}
-			if lastLogIndex, err := s.logStore.LastIndex(); err != nil {
-				t.setResult(nil, err)
-				break
-			} else {
-				s.setLastLogIndex(lastLogIndex)
-			}
-			t.setResult(log.Meta, nil)
 		case commitIndex := <-s.commitCh:
 			s.updateCommitIndex(commitIndex)
+		case c := <-s.confCh:
+			s.alterConfiguration(c)
+			s.reselectLoop()
+		case t := <-s.logOpsCh:
+			switch op := t.(type) {
+			case *logProviderAppendOp:
+				op.setResult(s.appendLogs(op.Task()))
+			case *logProviderTrimOp:
+				switch op.Type {
+				case logProviderTrimPrefix:
+					op.setResult(nil, s.logProvider.TrimPrefix(op.Task()))
+				case logProviderTrimSuffix:
+					op.setResult(nil, s.logProvider.TrimSuffix(op.Task()))
+				default:
+					s.logger.Warnw("unknown type in logProviderTrimOp", logFields(s)...)
+				}
+			default:
+				s.logger.Warnw("unknown logProviderOp", logFields(s)...)
+			}
 		case rpc := <-s.trans.RPC():
 			go s.handleRPC(rpc)
-		case <-s.snapshotCh:
-			s.stateMachine.Snapshot()
 		case err := <-s.shutdownCh:
 			s.internalShutdown(err)
+			return
+		case t := <-s.stateMachineSnapshotCh:
+			t.setResult(s.stateMachine.Snapshot())
+		case term := <-stepdownCh:
+			// We'll update the leader in other loops
+			s.stepdownFollower(nilPeer)
+			s.alterTerm(term)
+			return
+		case t := <-s.snapshotRestoreCh:
+			t.setResult(s.snapshotService.Restore(t.Task()))
+		}
+		if s.shouldReselectLoop() {
 			return
 		}
 	}
@@ -411,18 +423,21 @@ func (s *Server) runLoopCandidate() {
 			s.logger.Infow("timed out in Candidate loop", logFields(s)...)
 			voteCancel()
 			return
-		case t := <-s.bootstrapCh:
-			t.setResult(nil, ErrNonFollower)
 		case commitIndex := <-s.commitCh:
 			s.updateCommitIndex(commitIndex)
 		case c := <-s.confCh:
 			s.alterConfiguration(c)
-			return
+			s.reselectLoop()
 		case rpc := <-s.trans.RPC():
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
 			voteCancel()
 			s.internalShutdown(err)
+			return
+		case t := <-s.snapshotRestoreCh:
+			t.setResult(s.snapshotService.Restore(t.Task()))
+		}
+		if s.shouldReselectLoop() {
 			return
 		}
 	}
@@ -431,30 +446,54 @@ func (s *Server) runLoopCandidate() {
 func (s *Server) runLoopFollower() {
 	s.logger.Infow("run follower loop", logFields(s)...)
 	followerTimer := s.randomTimer(s.opts.followerTimeout)
+
+	s.snapshotService.StartScheduler()
+	defer s.snapshotService.StopScheduler()
+
 	for s.role() == Follower {
 		select {
 		case <-followerTimer.C:
 			s.logger.Infow("follower timed out", logFields(s)...)
 			s.alterRole(Candidate)
-			return
-		case t := <-s.bootstrapCh:
-			s.runBootstrap(t)
-		case <-s.applyLogCh:
-			//
+			s.reselectLoop()
 		case commitIndex := <-s.commitCh:
 			s.updateCommitIndex(commitIndex)
 		case c := <-s.confCh:
 			s.alterConfiguration(c)
-			return
+			s.reselectLoop()
+		case t := <-s.logOpsCh:
+			switch op := t.(type) {
+			case *logProviderAppendOp:
+				op.setResult(s.appendLogs(op.Task()))
+			case *logProviderTrimOp:
+				switch op.Type {
+				case logProviderTrimPrefix:
+					op.setResult(nil, s.logProvider.TrimPrefix(op.Task()))
+				case logProviderTrimSuffix:
+					op.setResult(nil, s.logProvider.TrimSuffix(op.Task()))
+				default:
+					s.logger.Warnw("unknown type in logProviderTrimOp", logFields(s)...)
+				}
+			default:
+				s.logger.Warnw("unknown log operation", logFields(s)...)
+			}
 		case rpc := <-s.trans.RPC():
 			followerTimer.Reset(s.opts.followerTimeout)
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
 			s.internalShutdown(err)
 			return
+		case t := <-s.stateMachineSnapshotCh:
+			t.setResult(s.stateMachine.Snapshot())
+		case t := <-s.snapshotRestoreCh:
+			t.setResult(s.snapshotService.Restore(t.Task()))
+		}
+		if s.shouldReselectLoop() {
+			return
 		}
 	}
 }
+
 func (s *Server) serveAPIServer() {
 	rand.Seed(time.Now().UnixNano())
 	bindAddress := s.opts.apiServerListenAddress
@@ -484,7 +523,7 @@ func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.Cancel
 	var lastIndex uint64
 	var lastTerm uint64
 
-	log, err := s.logStore.LastEntry()
+	log, err := s.logProvider.LastEntry()
 	if err != nil {
 		voteCancel()
 		return nil, nil, err
@@ -537,14 +576,14 @@ func (s *Server) updateCommitIndex(commitIndex uint64) {
 		s.logger.Infow("lastAppliedIndex == commitIndex, there's nothing to apply", logFields(s)...)
 		return
 	}
-	s.setCommitIndex(commitIndex)
 	if lastAppliedIndex > commitIndex {
 		s.logger.Panicw("confusing condition: lastAppliedIndex > commitIndex", logFields(s)...)
 	}
+	s.setCommitIndex(commitIndex)
 	firstIndex := lastAppliedIndex + 1
 	s.logger.Infow("ready to apply logs", logFields(s, "first_index", firstIndex, "last_index", commitIndex)...)
 	for i := firstIndex; i <= commitIndex; i++ {
-		log := Must2(s.logStore.Entry(i)).(*pb.Log)
+		log := Must2(s.logProvider.Entry(i))
 		if log == nil {
 			// We've found one or more gaps in the logs
 			s.logger.Panicw("one or more log gaps are detected", logFields(s, "missing_index", i)...)
@@ -571,31 +610,41 @@ func (s *Server) updateCommitIndex(commitIndex uint64) {
 // Apply.
 // Future(LogMeta, error)
 func (s *Server) Apply(ctx context.Context, body *pb.LogBody) FutureTask[*pb.LogMeta, *pb.LogBody] {
-	fu := newFutureTask[*pb.LogMeta](body.Copy())
+	t := newFutureTask[*pb.LogMeta](body.Copy())
 	if s.role() == Leader {
 		// Leader path
+		internalTask := newFutureTask[[]*pb.LogMeta]([]*pb.LogBody{body.Copy()})
+		appendOp := &logProviderAppendOp{FutureTask: internalTask}
 		select {
-		case s.applyLogCh <- fu:
+		case s.logOpsCh <- appendOp:
 		case <-ctx.Done():
-			fu.setResult(nil, ErrDeadlineExceeded)
+			internalTask.setResult(nil, ErrDeadlineExceeded)
 		}
-	} else {
-		go func() {
-			// Redirect requests to the leader on non-leader servers.
-			response, err := s.trans.ApplyLog(ctx, s.Leader(), &pb.ApplyLogRequest{Body: body.Copy()})
-			if err != nil {
-				fu.setResult(nil, err)
-			}
-			// TODO: Crashes happen here sometimes.
-			switch r := response.Response.(type) {
-			case *pb.ApplyLogResponse_Meta:
-				fu.setResult(r.Meta, nil)
-			case *pb.ApplyLogResponse_Error:
-				fu.setResult(nil, errors.New(r.Error))
-			}
-		}()
+		if logMeta, err := internalTask.Result(); err != nil {
+			t.setResult(nil, err)
+		} else {
+			t.setResult(logMeta[0], nil)
+		}
+		return t
 	}
-	return fu
+
+	// Proxy path
+	go func() {
+		// Redirect requests to the leader on non-leader servers.
+		response, err := s.trans.ApplyLog(ctx, s.Leader(), &pb.ApplyLogRequest{Body: body.Copy()})
+		if err != nil {
+			t.setResult(nil, err)
+		}
+		// TODO: Crashes happen here sometimes.
+		switch r := response.Response.(type) {
+		case *pb.ApplyLogResponse_Meta:
+			t.setResult(r.Meta, nil)
+		case *pb.ApplyLogResponse_Error:
+			t.setResult(nil, errors.New(r.Error))
+		}
+	}()
+
+	return t
 }
 
 // ApplyCommand.
@@ -607,25 +656,25 @@ func (s *Server) ApplyCommand(ctx context.Context, command Command) FutureTask[*
 	})
 }
 
-func (s *Server) Bootstrap(c *Configuration) Future[any] {
-	if s.shutdownState() {
-		return newErrorFuture(ErrServerShutdown)
-	}
-	task := newFutureTask[any, any](c)
-	select {
-	case s.bootstrapCh <- task:
-		return task
-	case err := <-s.shutdownCh:
-		s.internalShutdown(err)
-		return newErrorFuture(ErrServerShutdown)
-	}
-}
+// func (s *Server) Bootstrap(c *Configuration) Future[any] {
+// 	if s.shutdownState() {
+// 		return newErrorFuture(ErrServerShutdown)
+// 	}
+// 	task := newFutureTask[any, any](c)
+// 	select {
+// 	case s.bootstrapCh <- task:
+// 		return task
+// 	case err := <-s.shutdownCh:
+// 		s.internalShutdown(err)
+// 		return newErrorFuture(ErrServerShutdown)
+// 	}
+// }
 
 func (s *Server) StateMachine() StateMachine {
-	return s.stateMachine.stateMachine
+	return s.stateMachine
 }
 
-func (s *Server) ID() string {
+func (s *Server) Id() string {
 	return s.id
 }
 
@@ -691,12 +740,21 @@ func (s *Server) Serve() error {
 	} else {
 		// The latest configuration does not contain any peers.
 		// The server should be the first node in the cluster.
-		c := newConfiguration(&pb.Configuration{
+		pbConfiguration := &pb.Configuration{
 			Current: &pb.Config{
 				Peers: []*pb.Peer{{Id: s.id, Endpoint: s.Endpoint()}},
 			},
-		})
-		s.confStore.ArbitraryAppend(c)
+		}
+		configurationBytes, err := proto.Marshal(pbConfiguration)
+		if err != nil {
+			return err
+		}
+		if _, err := s.appendLogs([]*pb.LogBody{
+			{Type: pb.LogType_CONFIGURATION, Data: configurationBytes},
+		}); err != nil {
+			s.logger.Panicw("error occurred bootstrapping configuration for ourself",
+				logFields(s, zap.Error(err))...)
+		}
 	}
 
 	if s.opts.metricsExporter != nil {
@@ -710,8 +768,6 @@ func (s *Server) Serve() error {
 	}()
 
 	go s.serveAPIServer()
-
-	s.snapshotSched.Start()
 
 	go s.runMainLoop()
 
