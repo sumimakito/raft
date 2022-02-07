@@ -166,10 +166,15 @@ func (s *configurationStore) InitiateTransition(next *Config) error {
 		return ErrInJointConsensus
 	}
 	c := latest.CopyInitiateTransition(next.Config)
-	s.server.applyLogCh <- newFutureTask[*pb.LogMeta](&pb.LogBody{
-		Type: pb.LogType_CONFIGURATION,
-		Data: Must2(proto.Marshal(c)).([]byte),
-	})
+	appendOp := &logProviderAppendOp{
+		FutureTask: newFutureTask[[]*pb.LogMeta]([]*pb.LogBody{
+			{Type: pb.LogType_CONFIGURATION, Data: Must2(proto.Marshal(c))},
+		}),
+	}
+	s.server.logOpsCh <- appendOp
+	if _, err := appendOp.Result(); err != nil {
+		return err
+	}
 	s.server.logger.Infow("a configuration transition has been initiated",
 		logFields(s.server, "configuration", c)...)
 	return nil
@@ -184,10 +189,15 @@ func (s *configurationStore) CommitTransition() error {
 		return ErrNotInJointConsensus
 	}
 	c := latest.CopyCommitTransition()
-	s.server.applyLogCh <- newFutureTask[*pb.LogMeta](&pb.LogBody{
-		Type: pb.LogType_CONFIGURATION,
-		Data: Must2(proto.Marshal(c)).([]byte),
-	})
+	appendOp := &logProviderAppendOp{
+		FutureTask: newFutureTask[[]*pb.LogMeta]([]*pb.LogBody{
+			{Type: pb.LogType_CONFIGURATION, Data: Must2(proto.Marshal(c))},
+		}),
+	}
+	s.server.logOpsCh <- appendOp
+	if _, err := appendOp.Result(); err != nil {
+		return err
+	}
 	s.server.logger.Infow("a configuration transition has been committed",
 		logFields(s.server, "configuration", c)...)
 	return nil
