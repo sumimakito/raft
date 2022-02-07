@@ -5,12 +5,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/sumimakito/raft/pb"
+	"go.uber.org/zap"
 )
 
-type Snapshot struct {
-	Meta   SnapshotMeta
-	Reader io.ReadCloser
+// Snapshot is a descriptor that holds the snapshot file.
+type Snapshot interface {
+	Meta() (SnapshotMeta, error)
+	Reader() (io.Reader, error)
+
+	// Close is used to close the snapshot's underlying file descriptors or handles.
+	Close() error
 }
 
 type SnapshotPolicy struct {
@@ -28,124 +34,222 @@ type SnapshotMeta interface {
 
 type SnapshotSink interface {
 	io.WriteCloser
-	Id() string
+	Meta() SnapshotMeta
 	Cancel() error
 }
 
-type SnapshotStore interface {
+type SnapshotProvider interface {
 	Create(index, term uint64, c *pb.Configuration) (SnapshotSink, error)
 	List() ([]SnapshotMeta, error)
-	Open(id string) (*Snapshot, error)
+	Open(id string) (Snapshot, error)
 	DecodeMeta(b []byte) (SnapshotMeta, error)
-
-	// Trim trims the snapshot store by evicting snapshots with indexes smaller
-	// than the provided index.
-	Trim(index uint64) error
+	Trim() error
 }
 
-// snapshotScheduler is responsible for triggering snapshot creations under
-// the SnapshotPolicy.
 type snapshotScheduler struct {
-	server *Server
-	mu     sync.Mutex
+	server  *Server
+	service *snapshotService
 
-	interval  time.Duration
-	applies   int
-	appliesCh chan struct{}
+	stopCh chan struct{}
 
-	ctl *asyncCtl
-
-	applyCounter int
+	counterTimerMu sync.Mutex
+	counterTimer   *CounterTimer
 }
 
-func newSnapshotScheduler(server *Server) *snapshotScheduler {
-	return &snapshotScheduler{
-		server:    server,
-		interval:  server.opts.snapshotPolicy.Interval,
-		applies:   server.opts.snapshotPolicy.Applies,
-		appliesCh: make(chan struct{}, 1),
-	}
-}
-
-func (s *snapshotScheduler) schedule(ctl *asyncCtl) {
-	defer ctl.Release()
-
-	var ticker *time.Ticker
-	var tickerCh <-chan time.Time
-
-	if s.interval > 0 {
-		ticker = time.NewTicker(s.interval)
-		defer ticker.Stop()
-		tickerCh = ticker.C
+func newSnapshotScheduler(server *Server, service *snapshotService) *snapshotScheduler {
+	s := &snapshotScheduler{
+		server:  server,
+		service: service,
+		stopCh:  make(chan struct{}, 1),
+		counterTimer: NewCounterTimer(
+			server.opts.snapshotPolicy.Applies,
+			server.opts.snapshotPolicy.Interval,
+		),
 	}
 
-	for {
-		select {
-		case <-tickerCh:
-			s.server.snapshotCh <- nil
-		case <-s.appliesCh:
-			ticker.Reset(s.interval)
-			s.server.snapshotCh <- nil
-		case <-ctl.Cancelled():
-			return
+	go func() {
+		s.server.logger.Infow("snapshotScheduler started")
+		defer s.server.logger.Infow("snapshotScheduler stopped")
+		for {
+			select {
+			case <-s.counterTimer.C():
+				select {
+				case s.service.snapshotCh <- struct{}{}:
+				default:
+				}
+			case <-s.stopCh:
+				s.counterTimer.Stop()
+				return
+			}
 		}
-	}
+	}()
+
+	return s
 }
 
-// RecordApply is called when a command has been applied to the StateMachine.
-func (s *snapshotScheduler) RecordApply() {
-	if s.applies <= 0 {
-		// "Applies" in the SnapshotPolicy is disabled.
-		return
-	}
-	s.mu.Lock()
-
-	s.applyCounter += 1
-	if s.applyCounter >= s.applies {
-		s.applyCounter = 0
-		s.mu.Unlock()
-		select {
-		case s.appliesCh <- struct{}{}:
-		case <-time.NewTimer(s.interval).C:
-		case <-s.ctl.Cancelled():
-		}
-	} else {
-		s.mu.Unlock()
-	}
-}
-
-func (s *snapshotScheduler) Start() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.ctl != nil {
-		select {
-		case <-s.ctl.Cancelled():
-			s.server.logger.Panic("attempt to reuse a stopped snapshotScheduler")
-		default:
-			s.server.logger.Panic("attempt to start a started snapshotScheduler")
-		}
-	}
-
-	s.ctl = newAsyncCtl()
-
-	go s.schedule(s.ctl)
+// CountApply is called when a command has been applied to the StateMachine.
+func (s *snapshotScheduler) CountApply() {
+	s.counterTimer.Count()
 }
 
 func (s *snapshotScheduler) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	close(s.stopCh)
+}
 
-	if s.ctl == nil {
-		s.server.logger.Panic("attempt to stop a snapshotScheduler which is not started")
+// snapshotService is responsible for triggering snapshot creations under
+// the SnapshotPolicy.
+type snapshotService struct {
+	server *Server
+
+	schedulerMu sync.RWMutex
+	scheduler   *snapshotScheduler
+
+	snapshotCh chan struct{}
+	stopCh     chan struct{}
+
+	lastSnapshotMeta SnapshotMeta
+}
+
+func newSnapshotService(server *Server) *snapshotService {
+	s := &snapshotService{
+		server:     server,
+		snapshotCh: make(chan struct{}, 16),
+		stopCh:     make(chan struct{}, 1),
 	}
 
-	select {
-	case <-s.ctl.Cancelled():
-		s.server.logger.Panic("attempt to stop a stopped snapshotScheduler")
-	default:
-		s.ctl.Cancel()
+	go func() {
+		for {
+			select {
+			case <-s.snapshotCh:
+				s.TakeSnapshot()
+			case <-s.stopCh:
+				server.logger.Infow("snapshotService stopped")
+				return
+			}
+		}
+	}()
+
+	return s
+}
+
+func (s *snapshotService) Stop() {
+	close(s.stopCh)
+}
+
+func (s *snapshotService) Scheduler() *snapshotScheduler {
+	return s.scheduler
+}
+
+func (s *snapshotService) StartScheduler() {
+	s.schedulerMu.Lock()
+	defer s.schedulerMu.Unlock()
+
+	if s.scheduler != nil {
+		s.server.logger.Panic("called StartScheduler() on a running snapshotService")
 	}
 
-	<-s.ctl.WaitRelease()
+	s.scheduler = newSnapshotScheduler(s.server, s)
+}
+
+func (s *snapshotService) StopScheduler() {
+	s.schedulerMu.Lock()
+	defer s.schedulerMu.Unlock()
+
+	if s.scheduler == nil {
+		s.server.logger.Panic("called StopScheduler() on an idle snapshotService")
+	}
+	s.scheduler.Stop()
+	s.scheduler = nil
+}
+
+func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
+	c := s.server.confStore.Latest()
+
+	// Check if our latest snapshot is stale
+	if m := s.lastSnapshotMeta; m != nil && m.Index() >= s.server.lastAppliedIndex() {
+		s.server.logger.Debugw("snapshot skipped", logFields(s.server)...)
+		return nil, nil
+	}
+
+	stateMachineSnapshotFuture := newFutureTask[StateMachineSnapshot, any](nil)
+
+	s.server.stateMachineSnapshotCh <- stateMachineSnapshotFuture
+	s.server.logger.Infow("enqueued state machine snapshot request", logFields(s.server)...)
+
+	smSnapshot, err := stateMachineSnapshotFuture.Result()
+	if err != nil {
+		return nil, err
+	}
+
+	sink, err := s.server.snapshotProvider.Create(smSnapshot.Index(), smSnapshot.Term(), c.Configuration)
+	if err != nil {
+		return nil, err
+	}
+	snapshotMeta := sink.Meta()
+
+	if err := smSnapshot.Write(sink); err != nil {
+		if cancelError := sink.Cancel(); cancelError != nil {
+			return nil, errors.Wrap(cancelError, err.Error())
+		}
+		return nil, err
+	}
+	if err := sink.Close(); err != nil {
+		return nil, err
+	}
+
+	// Trim the logs which were included in the snapshot.
+	trimOp := &logProviderTrimOp{
+		Type:       logProviderTrimPrefix,
+		FutureTask: newFutureTask[any](smSnapshot.Index() + 1),
+	}
+	s.server.logOpsCh <- trimOp
+	if _, err := trimOp.Result(); err != nil {
+		return nil, err
+	}
+
+	s.lastSnapshotMeta = snapshotMeta
+
+	s.server.logger.Infow("snapshot has been taken",
+		logFields(s.server,
+			zap.String("snapshot_id", snapshotMeta.Id()),
+			zap.Uint64("snapshot_index", sink.Meta().Index()),
+			zap.Uint64("snapshot_term", sink.Meta().Term()))...)
+
+	return snapshotMeta, nil
+}
+
+// Restore must be called in a channel select branch
+func (s *snapshotService) Restore(snapshotId string) (bool, error) {
+	snapshot, err := s.server.snapshotProvider.Open(snapshotId)
+	if err != nil {
+		// It's recoverable if errors happen here.
+		return false, err
+	}
+
+	snapshotMeta, err := snapshot.Meta()
+	if err != nil {
+		return false, err
+	}
+
+	// Check if the restoration is necessary.
+	if snapshotMeta.Index() < s.server.firstLogIndex() {
+		// Restoration is not necessary.
+		return false, nil
+	}
+
+	if err := s.server.stateMachine.Restore(snapshot); err != nil {
+		return false, err
+	}
+	// We can directly call TrimPrefix() since there're no concurrent writes to th log provider
+	if err := s.server.logProvider.TrimPrefix(snapshotMeta.Index() + 1); err != nil {
+		s.server.logger.Panicw("error occurred while triming logs during restoration",
+			logFields(s.server, zap.Error(err))...)
+	}
+
+	s.server.setFirstLogIndex(Must2(s.server.logProvider.FirstIndex()))
+	s.server.setLastLogIndex(Must2(s.server.logProvider.LastIndex()))
+
+	s.server.alterConfiguration(newConfiguration(snapshotMeta.Configuration()))
+	s.server.reselectLoop()
+	return true, nil
 }
