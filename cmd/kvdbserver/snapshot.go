@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,60 +17,98 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type Snapshot struct {
+	metadata *SnapshotMeta
+	reader   io.ReadCloser
+}
+
+func newSnapshot(snapshotDir string) (*Snapshot, error) {
+	metadataFile, err := os.OpenFile(filepath.Join(snapshotDir, "metadata"), os.O_RDONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	metadataBytes, err := ioutil.ReadAll(metadataFile)
+	if err := metadataFile.Close(); err != nil {
+		return nil, err
+	}
+	var pbMetadata kvdbpb.SnapshotMeta
+	proto.Unmarshal(metadataBytes, &pbMetadata)
+	snapshotFile, err := os.OpenFile(filepath.Join(snapshotDir, "snapshot"), os.O_RDONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	return &Snapshot{
+		metadata: &SnapshotMeta{pbMetadata: &pbMetadata},
+		reader:   raft.NewBufferedReadCloser(snapshotFile),
+	}, nil
+}
+
+func (s *Snapshot) Meta() (raft.SnapshotMeta, error) {
+	return s.metadata, nil
+}
+
+func (s *Snapshot) Reader() (io.Reader, error) {
+	return s.reader, nil
+}
+
+func (s *Snapshot) Close() error {
+	return s.reader.Close()
+}
+
 type SnapshotMeta struct {
-	metadata *kvdbpb.SnapshotMeta
+	pbMetadata *kvdbpb.SnapshotMeta
 }
 
 func (m *SnapshotMeta) Id() string {
-	return m.metadata.Id
+	return m.pbMetadata.Id
 }
 
 func (m *SnapshotMeta) SetId(id string) {
-	m.metadata.Id = id
+	m.pbMetadata.Id = id
 }
 
 func (m *SnapshotMeta) Index() uint64 {
-	return m.metadata.Index
+	return m.pbMetadata.Index
 }
 
 func (m *SnapshotMeta) SetIndex(index uint64) {
-	m.metadata.Index = index
+	m.pbMetadata.Index = index
 }
 
 func (m *SnapshotMeta) Term() uint64 {
-	return m.metadata.Term
+	return m.pbMetadata.Term
 }
 
 func (m *SnapshotMeta) SetTerm(term uint64) {
-	m.metadata.Term = term
+	m.pbMetadata.Term = term
 }
 
 func (m *SnapshotMeta) Configuration() *pb.Configuration {
-	return m.metadata.Configuration
+	return m.pbMetadata.Configuration
 }
 
 func (m *SnapshotMeta) SetConfiguration(configuration *pb.Configuration) {
-	m.metadata.Configuration = configuration
+	m.pbMetadata.Configuration = configuration
 }
 
 func (m *SnapshotMeta) Size() uint64 {
-	return m.metadata.Size
+	return m.pbMetadata.Size
 }
 
 func (m *SnapshotMeta) SetSize(size uint64) {
-	m.metadata.Size = size
+	m.pbMetadata.Size = size
 }
 
 func (m *SnapshotMeta) CRC64() uint64 {
-	return m.metadata.Crc64
+	return m.pbMetadata.Crc64
 }
 
 func (m *SnapshotMeta) SetCRC64(crc64 uint64) {
-	m.metadata.Crc64 = crc64
+	m.pbMetadata.Crc64 = crc64
 }
 
 func (m *SnapshotMeta) Encode() ([]byte, error) {
-	return proto.Marshal(m.metadata)
+	return proto.Marshal(m.pbMetadata)
 }
 
 type SnapshotSink struct {
@@ -78,6 +117,7 @@ type SnapshotSink struct {
 
 	metadata *SnapshotMeta
 
+	metadataFile   *os.File
 	snapshotFile   *os.File
 	snapshotWriter *bufio.Writer
 }
@@ -97,7 +137,7 @@ func (s *SnapshotSink) writeMeta() error {
 	}
 	writer := raft.NewBufferedWriteCloser(file)
 	defer writer.Close()
-	metadataBytes, err := proto.Marshal(s.metadata.metadata)
+	metadataBytes, err := proto.Marshal(s.metadata.pbMetadata)
 	if err != nil {
 		return err
 	}
@@ -120,6 +160,10 @@ func (s *SnapshotSink) close() error {
 		}
 	}
 	return nil
+}
+
+func (s *SnapshotSink) Meta() raft.SnapshotMeta {
+	return s.metadata
 }
 
 func (s *SnapshotSink) Write(p []byte) (n int, err error) {
@@ -153,10 +197,6 @@ func (s *SnapshotSink) Close() error {
 	return nil
 }
 
-func (s *SnapshotSink) Id() string {
-	return s.metadata.Id()
-}
-
 func (s *SnapshotSink) Cancel() error {
 	if err := s.close(); err != nil {
 		return err
@@ -167,52 +207,37 @@ func (s *SnapshotSink) Cancel() error {
 	return nil
 }
 
-type SnapshotStore struct {
+type SnapshotProvider struct {
 	storeDir string
 }
 
-func NewSnapshotStore(storeDir string) *SnapshotStore {
-	return &SnapshotStore{storeDir: storeDir}
+func NewSnapshotProvider(storeDir string) *SnapshotProvider {
+	return &SnapshotProvider{storeDir: storeDir}
 }
 
-func (s *SnapshotStore) Create(index, term uint64, c *pb.Configuration) (raft.SnapshotSink, error) {
-	id := raft.NewObjectID().Hex()
-
-	wipDir := filepath.Join(s.storeDir, fmt.Sprintf("inprogress-%s", id))
-	finalDir := filepath.Join(s.storeDir, id)
-
-	if err := os.MkdirAll(wipDir, 0755); err != nil {
-		return nil, err
-	}
-
-	sink := newSnapshotSink(wipDir, finalDir, &SnapshotMeta{
-		metadata: &kvdbpb.SnapshotMeta{
-			Id:            id,
-			Index:         index,
-			Term:          term,
-			Configuration: c.Copy(),
-		},
-	})
-
-	return sink, nil
-}
-
-func (s *SnapshotStore) List() ([]raft.SnapshotMeta, error) {
-	ids := []string{}
+func (s *SnapshotProvider) listDirnames() ([]string, []string, error) {
+	complete := []string{}
+	inprogress := []string{}
 	if err := filepath.WalkDir(s.storeDir, func(path string, d fs.DirEntry, err error) error {
 		if path == s.storeDir || !d.IsDir() {
 			return nil
 		}
 		if !strings.HasPrefix(d.Name(), "inprogress-") {
-			ids = append(ids, d.Name())
+			complete = append(complete, d.Name())
+		} else {
+			inprogress = append(inprogress, d.Name())
 		}
 		return filepath.SkipDir
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	return complete, inprogress, nil
+}
+
+func (s *SnapshotProvider) sortMeta(dirnames []string) ([]raft.SnapshotMeta, error) {
 	metadataList := []raft.SnapshotMeta{}
-	for _, id := range ids {
-		file, err := os.Open(filepath.Join(s.storeDir, id, "metadata"))
+	for _, dirname := range dirnames {
+		file, err := os.Open(filepath.Join(s.storeDir, dirname, "metadata"))
 		if err != nil {
 			return nil, err
 		}
@@ -231,40 +256,64 @@ func (s *SnapshotStore) List() ([]raft.SnapshotMeta, error) {
 	return metadataList, nil
 }
 
-func (s *SnapshotStore) Open(id string) (*raft.Snapshot, error) {
-	file, err := os.Open(filepath.Join(s.storeDir, id, "metadata"))
+func (s *SnapshotProvider) Create(index, term uint64, c *pb.Configuration) (raft.SnapshotSink, error) {
+	id := raft.NewObjectID().Hex()
+
+	wipDir := filepath.Join(s.storeDir, fmt.Sprintf("inprogress-%s", id))
+	finalDir := filepath.Join(s.storeDir, id)
+
+	if err := os.MkdirAll(wipDir, 0755); err != nil {
+		return nil, err
+	}
+
+	sink := newSnapshotSink(wipDir, finalDir, &SnapshotMeta{
+		pbMetadata: &kvdbpb.SnapshotMeta{
+			Id:            id,
+			Index:         index,
+			Term:          term,
+			Configuration: c.Copy(),
+		},
+	})
+
+	return sink, nil
+}
+
+func (s *SnapshotProvider) List() ([]raft.SnapshotMeta, error) {
+	complete, _, err := s.listDirnames()
 	if err != nil {
 		return nil, err
 	}
-	metadataBytes, err := io.ReadAll(file)
-	file.Close()
-	var metadata kvdbpb.SnapshotMeta
-	proto.Unmarshal(metadataBytes, &metadata)
-	file, err = os.Open(filepath.Join(s.storeDir, id, "snapshot"))
-	if err != nil {
-		return nil, err
-	}
-	return &raft.Snapshot{
-		Meta:   &SnapshotMeta{metadata: &metadata},
-		Reader: raft.NewBufferedReadCloser(file),
-	}, nil
+	return s.sortMeta(complete)
 }
 
-func (s *SnapshotStore) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {
-	var metadata kvdbpb.SnapshotMeta
-	proto.Unmarshal(b, &metadata)
-	return &SnapshotMeta{metadata: &metadata}, nil
+func (s *SnapshotProvider) Open(id string) (raft.Snapshot, error) {
+	return newSnapshot(filepath.Join(s.storeDir, id))
 }
 
-func (s *SnapshotStore) Trim(index uint64) error {
-	metadataList, err := s.List()
+func (s *SnapshotProvider) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {
+	var pbMetadata kvdbpb.SnapshotMeta
+	proto.Unmarshal(b, &pbMetadata)
+	return &SnapshotMeta{pbMetadata: &pbMetadata}, nil
+}
+
+// TODO: Refactor this
+func (s *SnapshotProvider) Trim() error {
+	complete, inprogress, err := s.listDirnames()
 	if err != nil {
 		return err
 	}
-	i := sort.Search(len(metadataList), func(i int) bool {
-		return metadataList[i].Index() < index
-	})
-	for _, metadata := range metadataList[i:] {
+	// Evict in-progress snapshots
+	for _, dirname := range inprogress {
+		if err := os.RemoveAll(filepath.Join(s.storeDir, dirname)); err != nil {
+			return err
+		}
+	}
+	// Evict complete snapshots
+	metadataList, err := s.sortMeta(complete)
+	if err != nil {
+		return err
+	}
+	for _, metadata := range metadataList[1:] {
 		if err := os.RemoveAll(filepath.Join(s.storeDir, metadata.Id())); err != nil {
 			return err
 		}

@@ -8,6 +8,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/sumimakito/raft"
 	"github.com/sumimakito/raft/grpctrans"
@@ -95,23 +96,30 @@ func main() {
 		log.Panic(err)
 	}
 	kvdbAPIExt := NewAPIExtension(logger)
-	logStore := NewLogStore(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
+	logProvider := NewLogProvider(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
 	kvsm := NewKVSM()
-	snapshot := NewSnapshotStore(snapshotDir)
+	snapshot := NewSnapshotProvider(snapshotDir)
 
 	server, err := raft.NewServer(
 		raft.ServerCoreOptions{
-			ID:           serverID,
-			Log:          logStore,
-			StateMachine: kvsm,
-			Snapshot:     snapshot,
-			Transport:    transport,
+			Id:               serverID,
+			LogProvider:      logProvider,
+			StateMachine:     kvsm,
+			SnapshotProvider: snapshot,
+			Transport:        transport,
 		},
+		raft.ElectionTimeoutOption(1*time.Second),
+		raft.FollowerTimeoutOption(1*time.Second),
 		raft.APIExtensionOption(kvdbAPIExt),
 		raft.APIServerListenAddressOption(apiServerAddr),
 		raft.LogLevelOption(logLevel),
 		raft.StableStorePathOption(filepath.Join(stableDir, fmt.Sprintf("stable_%s.db", serverID))),
 	)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	log.Println(server)
 
 	if err := server.Serve(); err != nil {
 		log.Panic(err)

@@ -8,17 +8,19 @@ import (
 )
 
 type KVSM struct {
-	statesMu sync.RWMutex // protects states
-	states   map[string][]byte
+	mu     sync.RWMutex
+	index  uint64
+	term   uint64
+	states map[string][]byte
 }
 
 func NewKVSM() *KVSM {
 	return &KVSM{states: map[string][]byte{}}
 }
 
-func (m *KVSM) Apply(command raft.Command) {
-	m.statesMu.Lock()
-	defer m.statesMu.Unlock()
+func (m *KVSM) Apply(index, term uint64, command raft.Command) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	cmd := DecodeCommand(command)
 	switch cmd.Type {
 	case CommandSet:
@@ -26,11 +28,13 @@ func (m *KVSM) Apply(command raft.Command) {
 	case CommandUnset:
 		delete(m.states, cmd.Key)
 	}
+	m.index = index
+	m.term = term
 }
 
 func (m *KVSM) Keys() (keys []string) {
-	m.statesMu.RLock()
-	defer m.statesMu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for key := range m.states {
 		keys = append(keys, key)
 	}
@@ -38,15 +42,15 @@ func (m *KVSM) Keys() (keys []string) {
 }
 
 func (m *KVSM) Value(key string) ([]byte, bool) {
-	m.statesMu.RLock()
-	defer m.statesMu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	v, ok := m.states[key]
 	return v, ok
 }
 
 func (m *KVSM) KeyValues() map[string][]byte {
-	m.statesMu.RLock()
-	defer m.statesMu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	keyValues := map[string][]byte{}
 	for key, value := range m.states {
 		keyValues[key] = append(([]byte)(nil), value...)
@@ -55,20 +59,24 @@ func (m *KVSM) KeyValues() map[string][]byte {
 }
 
 func (m *KVSM) Snapshot() (raft.StateMachineSnapshot, error) {
-	m.statesMu.RLock()
-	defer m.statesMu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	keyValues := map[string][]byte{}
 	for key, value := range m.states {
 		keyValues[key] = append(([]byte)(nil), value...)
 	}
-	return &KVSMSnapshot{keyValues: keyValues}, nil
+	return &KVSMSnapshot{index: m.index, term: m.term, keyValues: keyValues}, nil
 }
 
-func (m *KVSM) Restore(snapshot *raft.Snapshot) error {
-	m.statesMu.RLock()
-	defer m.statesMu.RUnlock()
+func (m *KVSM) Restore(snapshot raft.Snapshot) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	keyValues := map[string][]byte{}
-	if err := codec.NewDecoder(snapshot.Reader, &codec.MsgpackHandle{}).Decode(&keyValues); err != nil {
+	snapshotReader, err := snapshot.Reader()
+	if err != nil {
+		return err
+	}
+	if err := codec.NewDecoder(snapshotReader, &codec.MsgpackHandle{}).Decode(&keyValues); err != nil {
 		return err
 	}
 	m.states = keyValues
@@ -76,7 +84,17 @@ func (m *KVSM) Restore(snapshot *raft.Snapshot) error {
 }
 
 type KVSMSnapshot struct {
+	index     uint64
+	term      uint64
 	keyValues map[string][]byte
+}
+
+func (s *KVSMSnapshot) Index() uint64 {
+	return s.index
+}
+
+func (s *KVSMSnapshot) Term() uint64 {
+	return s.term
 }
 
 func (s *KVSMSnapshot) Write(sink raft.SnapshotSink) error {
