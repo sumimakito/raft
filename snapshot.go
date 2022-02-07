@@ -197,13 +197,9 @@ func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
 		return nil, err
 	}
 
-	// Trim the logs which were included in the snapshot.
-	trimOp := &logProviderTrimOp{
-		Type:       logProviderTrimPrefix,
-		FutureTask: newFutureTask[any](smSnapshot.Index() + 1),
-	}
-	s.server.logOpsCh <- trimOp
-	if _, err := trimOp.Result(); err != nil {
+	restoreFuture := newFutureTask[any](snapshotMeta)
+	s.server.stable.server.logRestoreCh <- restoreFuture
+	if _, err := restoreFuture.Result(); err != nil {
 		return nil, err
 	}
 
@@ -220,6 +216,8 @@ func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
 
 // Restore must be called in a channel select branch
 func (s *snapshotService) Restore(snapshotId string) (bool, error) {
+	s.server.logger.Infow("ready to restore snapshot",
+		logFields(s.server, zap.String("snapshot_id", snapshotId))...)
 	snapshot, err := s.server.snapshotProvider.Open(snapshotId)
 	if err != nil {
 		// It's recoverable if errors happen here.
@@ -240,8 +238,8 @@ func (s *snapshotService) Restore(snapshotId string) (bool, error) {
 	if err := s.server.stateMachine.Restore(snapshot); err != nil {
 		return false, err
 	}
-	// We can directly call TrimPrefix() since there're no concurrent writes to th log provider
-	if err := s.server.logProvider.TrimPrefix(snapshotMeta.Index() + 1); err != nil {
+
+	if err := s.server.logProvider.Restore(snapshotMeta); err != nil {
 		s.server.logger.Panicw("error occurred while triming logs during restoration",
 			logFields(s.server, zap.Error(err))...)
 	}
