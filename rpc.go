@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 
+	"github.com/pkg/errors"
 	"github.com/sumimakito/raft/pb"
-	"go.uber.org/zap"
 )
 
 type RPC struct {
@@ -85,11 +85,11 @@ func (h *rpcHandler) AppendEntries(
 	}
 
 	if request.PrevLogIndex > 0 {
-		requestPrevLog, err := h.server.logStore.Entry(request.PrevLogIndex)
+		prevLogMeta, err := h.server.logProvider.Meta(request.PrevLogIndex)
 		if err != nil {
 			return nil, err
 		}
-		if requestPrevLog == nil || request.PrevLogTerm != requestPrevLog.Meta.Term {
+		if prevLogMeta == nil || request.PrevLogTerm != prevLogMeta.Term {
 			h.server.logger.Infow("incoming previous log does not exist or has a different term",
 				logFields(h.server, "request_id", requestID, "request", request)...)
 			response.Status = pb.ReplStatus_REPL_ERR_NO_LOG
@@ -106,7 +106,7 @@ func (h *rpcHandler) AppendEntries(
 				if e.Meta.Index > lastLogIndex {
 					break
 				}
-				log, err := h.server.logStore.Entry(e.Meta.Index)
+				log, err := h.server.logProvider.Entry(e.Meta.Index)
 				if err != nil {
 					return nil, err
 				}
@@ -121,14 +121,21 @@ func (h *rpcHandler) AppendEntries(
 				firstAppendArrayIndex = i + 1
 			}
 			if firstCleanUpIndex > 0 {
-				h.server.logStore.TrimAfter(firstCleanUpIndex - 1)
+				if err := h.server.logProvider.TrimSuffix(firstCleanUpIndex - 1); err != nil {
+					// Return errors here should produce no side effects
+					return nil, err
+				}
 			}
 		}
 		bodies := make([]*pb.LogBody, 0, len(request.Entries)-firstAppendArrayIndex)
 		for i := firstAppendArrayIndex; i < len(request.Entries); i++ {
 			bodies = append(bodies, request.Entries[i].Body.Copy())
 		}
-		h.server.appendLogs(bodies)
+		appendOp := &logProviderAppendOp{FutureTask: newFutureTask[[]*pb.LogMeta](bodies)}
+		h.server.logOpsCh <- appendOp
+		if _, err := appendOp.Result(); err != nil {
+			return nil, err
+		}
 	}
 
 	if request.LeaderCommit > h.server.commitIndex() {
@@ -179,7 +186,7 @@ func (h *rpcHandler) RequestVote(
 		response.Term = h.server.currentTerm()
 	}
 
-	lastLog, err := h.server.logStore.LastEntry()
+	lastLog, err := h.server.logProvider.LastEntry()
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +221,6 @@ func (h *rpcHandler) RequestVote(
 func (h *rpcHandler) InstallSnapshot(
 	ctx context.Context, requestID string, request *InstallSnapshotRequest,
 ) (*pb.InstallSnapshotResponse, error) {
-	defer request.Reader.Close()
-
 	h.server.logger.Infow("incoming RPC: InstallSnapshot",
 		logFields(h.server, "request_id", requestID, "request", request)...)
 
@@ -226,18 +231,22 @@ func (h *rpcHandler) InstallSnapshot(
 		return response, nil
 	}
 
-	snapshotMeta, err := h.server.snapshot.DecodeMeta(request.Metadata.SnapshotMetadata)
+	snapshotMeta, err := h.server.snapshotProvider.DecodeMeta(request.Metadata.SnapshotMetadata)
 	if err != nil {
 		return nil, err
 	}
 
-	sink, err := h.server.snapshot.Create(snapshotMeta.Index(), snapshotMeta.Term(), snapshotMeta.Configuration())
+	sink, err := h.server.snapshotProvider.Create(snapshotMeta.Index(), snapshotMeta.Term(), snapshotMeta.Configuration())
 	if err != nil {
 		return nil, err
 	}
+
+	snapshotMeta = sink.Meta()
 
 	if _, err := io.Copy(sink, request.Reader); err != nil {
-		sink.Cancel()
+		if cancelError := sink.Cancel(); cancelError != nil {
+			return nil, errors.Wrap(cancelError, err.Error())
+		}
 		return nil, err
 	}
 
@@ -245,12 +254,9 @@ func (h *rpcHandler) InstallSnapshot(
 		return nil, err
 	}
 
-	go func() {
-		if err := h.server.snapshot.Trim(snapshotMeta.Index()); err != nil {
-			h.server.logger.Warnw("error calling Trim() on SnapshotStore",
-				logFields(h.server, zap.String("request_id", requestID), zap.Error(err))...)
-		}
-	}()
+	if _, err := h.server.snapshotService.Restore(sink.Meta().Id()); err != nil {
+		return nil, err
+	}
 
 	return response, nil
 }
