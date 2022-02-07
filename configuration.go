@@ -140,51 +140,19 @@ func newConfigurationStore(server *Server) (*configurationStore, error) {
 	c.latest.Store(nilConfiguration)
 
 	// Find the latest configuration
-	if finder, ok := server.logStore.(LogStoreTypedFinder); ok {
-		// Fast path
-		log, err := finder.LastTypedEntry(pb.LogType_CONFIGURATION)
-		if err != nil {
+	log, err := server.logProvider.LastTypedEntry(pb.LogType_CONFIGURATION)
+	if err != nil {
+		return nil, err
+	}
+	if log != nil {
+		var conf pb.Configuration
+		if err := proto.Unmarshal(log.Body.Data, &conf); err != nil {
 			return nil, err
 		}
-		if log != nil {
-			var conf pb.Configuration
-			if err := proto.Unmarshal(log.Body.Data, &conf); err != nil {
-				return nil, err
-			}
-			c.latest.Store(&Configuration{logIndex: log.Meta.Index, Configuration: &conf})
-		}
-	} else {
-		// Slow path
-		lastIndex, err := server.logStore.LastIndex()
-		if err != nil {
-			return nil, err
-		}
-		for i := lastIndex; i > 0; i-- {
-			log, err := server.logStore.Entry(i)
-			if err != nil {
-				return nil, err
-			}
-			if log == nil {
-				server.logger.Panicw("one or more log gaps are detected", logFields(server, "missing_index", i)...)
-			}
-			if log.Body.Type == pb.LogType_CONFIGURATION {
-				var conf pb.Configuration
-				if err := proto.Unmarshal(log.Body.Data, &conf); err != nil {
-					return nil, err
-				}
-				c.latest.Store(&Configuration{logIndex: log.Meta.Index, Configuration: &conf})
-				break
-			}
-		}
+		c.latest.Store(&Configuration{logIndex: log.Meta.Index, Configuration: &conf})
 	}
 
 	return c, nil
-}
-
-func (s *configurationStore) ArbitraryAppend(c *Configuration) {
-	s.server.appendLogs([]*pb.LogBody{
-		{Type: pb.LogType_CONFIGURATION, Data: Must2(proto.Marshal(c.Configuration)).([]byte)},
-	})
 }
 
 // InitiateTransition creates a configuration for joint consensus that combines
