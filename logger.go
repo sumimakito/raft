@@ -18,7 +18,7 @@ func logFields(server *Server, keysAndValues ...interface{}) []interface{} {
 	}, keysAndValues...)
 }
 
-func wrappedServerLogger(logLevel zapcore.Level) *zap.SugaredLogger {
+func serverLogger(logLevel zapcore.Level) *zap.SugaredLogger {
 	highPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
 		return lvl >= zapcore.ErrorLevel && lvl >= logLevel
 	})
@@ -31,20 +31,21 @@ func wrappedServerLogger(logLevel zapcore.Level) *zap.SugaredLogger {
 
 	prodEncoderConfig := zap.NewProductionEncoderConfig()
 	develEncoderConfig := zap.NewDevelopmentEncoderConfig()
+	develEncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
 	develEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	develEncoderConfig.CallerKey = "caller"
 
 	jsonEncoder := zapcore.NewJSONEncoder(prodEncoderConfig)
 	consoleEncoder := zapcore.NewConsoleEncoder(develEncoderConfig)
 
 	_ = jsonEncoder
-	// zapcore.AddSync(colorable.NewColorableStdout()),
 
 	core := zapcore.NewTee(
 		zapcore.NewCore(consoleEncoder, consoleStdout, lowPriority),
 		zapcore.NewCore(consoleEncoder, consoleStderr, highPriority),
 	)
 
-	logger := zap.New(core)
+	logger := zap.New(core, zap.AddCaller())
 
 	return logger.Sugar()
 }
