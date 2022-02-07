@@ -69,6 +69,7 @@ func (l *logProviderProxy) Restore(snapshotMeta SnapshotMeta) error {
 		return err
 	}
 	l.snapshotMeta = snapshotMeta
+	l.server.setLastLogIndex(Must2(l.LastIndex()))
 	return nil
 }
 
