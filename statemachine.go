@@ -6,12 +6,14 @@ import (
 )
 
 type StateMachine interface {
-	Apply(command Command)
+	Apply(index, term uint64, command Command)
 	Snapshot() (StateMachineSnapshot, error)
-	Restore(snapshot *Snapshot) error
+	Restore(snapshot Snapshot) error
 }
 
 type StateMachineSnapshot interface {
+	Index() uint64
+	Term() uint64
 	Write(sink SnapshotSink) error
 }
 
