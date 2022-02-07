@@ -7,10 +7,10 @@ import (
 )
 
 func TestSingleFlight(t *testing.T) {
-	var s SingleFlight
+	var s SingleFlight[int]
 	i := 1
-	f := func() interface{} { return i }
-	assert.Equal(t, 1, s.Do(f).(int))
+	f := func() int { return i }
+	assert.Equal(t, 1, s.Do(f))
 	i = 2
-	assert.Equal(t, 1, s.Do(f).(int))
+	assert.Equal(t, 1, s.Do(f))
 }
