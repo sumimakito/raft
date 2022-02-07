@@ -86,9 +86,8 @@ type Server struct {
 
 	apiServer *apiServer
 
-	logStore LogStore
-	snapshot SnapshotStore
-	trans    Transport
+	// flagReselectLoop is a flag used by current loop to exit and re-select a loop to enter.
+	flagReselectLoop uint32
 
 	shutdownOnce sync.Once
 }
@@ -253,6 +252,18 @@ func (s *Server) internalShutdown(err error) {
 func (s *Server) randomTimer(timeout time.Duration) *time.Timer {
 	randomOffset := rand.Int63n(int64(s.opts.maxTimerRandomOffsetRatio*float64(timeout)) + 1)
 	return time.NewTimer(timeout + time.Duration(randomOffset))
+}
+
+func (s *Server) reselectLoop() {
+	atomic.StoreUint32(&s.flagReselectLoop, 1)
+}
+
+func (s *Server) resetReselectLoop() {
+	atomic.StoreUint32(&s.flagReselectLoop, 0)
+}
+
+func (s *Server) shouldReselectLoop() bool {
+	return atomic.LoadUint32(&s.flagReselectLoop) != 0
 }
 
 func (s *Server) runBootstrap(futureTask FutureTask[any, any]) {
