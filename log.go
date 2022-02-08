@@ -10,12 +10,12 @@ type LogProvider interface {
 	// avoid data inconsistency due to an error or interruption.
 	AppendLogs(logs []*pb.Log) error
 
-	// TrimPrefix trims the log store by evicting logs forwards from the
-	// beginning until the log with the index is reached. Index is exclusive.
+	// TrimPrefix is used to trim the logs by evicting UNPACKED logs forwards from
+	// the first log until the log with the index is reached. Index is exclusive.
 	TrimPrefix(index uint64) error
 
-	// TrimSuffix trims the log store by evicting logs backwards from the
-	// ending until the log with the index is reached. Index is exclusive.
+	// TrimSuffix is used to trim the logs by evicting UNPACKED logs backwards from
+	// the last log until the log with the index is reached. Index is exclusive.
 	TrimSuffix(index uint64) error
 
 	FirstIndex() (uint64, error)
@@ -114,6 +114,10 @@ func (l *logProviderProxy) LastIndex() (uint64, error) {
 	return 0, nil
 }
 
+// Meta is used to get the log meta at the index. A valid index should be in
+// the range of the last log index in the snapshot, if any, or the first
+// unpacked log index to the last unpacked log index, if any, or the last log
+// index in the snapshot.
 func (l *logProviderProxy) Meta(index uint64) (*pb.LogMeta, error) {
 	if l.snapshotMeta != nil {
 		if index == l.snapshotMeta.Index() {
