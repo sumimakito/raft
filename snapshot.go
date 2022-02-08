@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sumimakito/raft/pb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // Snapshot is a descriptor that holds the snapshot file.
@@ -107,6 +108,7 @@ type snapshotService struct {
 	snapshotCh chan struct{}
 	stopCh     chan struct{}
 
+	lastSnapshotConf *pb.Configuration
 	lastSnapshotMeta SnapshotMeta
 }
 
@@ -162,13 +164,18 @@ func (s *snapshotService) StopScheduler() {
 	s.scheduler = nil
 }
 
+// TakeSnapshot is used to take a snapshot and trim log entries.
 func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
 	c := s.server.confStore.Latest()
 
 	// Check if our latest snapshot is stale
-	if m := s.lastSnapshotMeta; m != nil && m.Index() >= s.server.lastAppliedIndex() {
-		s.server.logger.Debugw("snapshot skipped", logFields(s.server)...)
-		return nil, nil
+	if m := s.lastSnapshotMeta; m != nil {
+		s.server.logger.Infof("lastSnapshotMeta index=%d conf=%v", m.Index(), m.Configuration())
+		// Skip if the snapshot index and configuration are identical to current values.
+		if m.Index() >= s.server.lastAppliedIndex() && proto.Equal(m.Configuration(), c.Configuration) {
+			s.server.logger.Debugw("snapshot skipped", logFields(s.server)...)
+			return nil, nil
+		}
 	}
 
 	stateMachineSnapshotFuture := newFutureTask[StateMachineSnapshot, any](nil)
