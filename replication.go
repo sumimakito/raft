@@ -145,6 +145,7 @@ CHECK_INDEX:
 					zap.Object("peer", s.peer),
 					zap.String("request_id", heartbeatRequestId),
 					zap.Reflect("request", heartbeaRequest))...)
+			goto RESET_LOOP
 		}
 
 		if heartbeatResponse.Term > heartbeaRequest.Term {
