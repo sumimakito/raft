@@ -206,7 +206,7 @@ REPLICATE:
 					zap.String("replication_id", ctl.replId),
 					zap.Object("peer", s.peer),
 					zap.String("request_id", replicationRequestId),
-					zap.Reflect("request", replicationResponse))...)
+					zap.Reflect("response", replicationResponse))...)
 			s.nextIndex = lastLogIndex + 1
 			s.r.setMatchIndex(s.peer.Id, lastLogIndex)
 			goto RESET_LOOP
@@ -214,12 +214,12 @@ REPLICATE:
 			// If snapshot is disabled:
 			// s.nextIndex = s.nextIndex - 1
 			// Or, we should consider installing snapshots
-			s.r.server.logger.Debugw("unsuccessful replication repsonse",
+			s.r.server.logger.Debugw("unsuccessful replication repsonse: no log",
 				logFields(s.r.server,
 					zap.String("replication_id", ctl.replId),
 					zap.Object("peer", s.peer),
 					zap.String("request_id", replicationRequestId),
-					zap.Reflect("request", replicationResponse))...)
+					zap.Reflect("response", replicationResponse))...)
 		default:
 			// We have nothing to do here
 			s.r.server.logger.Debugw("unsuccessful replication repsonse",
@@ -227,7 +227,7 @@ REPLICATE:
 					zap.String("replication_id", ctl.replId),
 					zap.Object("peer", s.peer),
 					zap.String("request_id", replicationRequestId),
-					zap.Reflect("request", replicationResponse))...)
+					zap.Reflect("response", replicationResponse))...)
 			goto RESET_LOOP
 		}
 	}
@@ -256,6 +256,11 @@ REPLICATE:
 		if metadataList[0].Index() <= s.r.matchIndex(s.peer.Id) {
 			// Installing this snapshot is meaningless since the peer has more
 			// logs than the snapshot.
+			s.r.server.logger.Infow("no eliible snapshots",
+				logFields(s.r.server,
+					zap.Error(err),
+					zap.String("replication_id", ctl.replId),
+					zap.Object("peer", s.peer))...)
 			goto NEXT_MOVE_FORWARD
 		}
 
@@ -412,8 +417,8 @@ func (r *replScheduler) prepareHeartbeat() (string, *pb.AppendEntriesRequest) {
 		Term:         r.server.currentTerm(),
 		LeaderId:     r.server.id,
 		LeaderCommit: r.server.commitIndex(),
-		PrevLogTerm:  0,
 		PrevLogIndex: 0,
+		PrevLogTerm:  0,
 		Entries:      []*pb.Log{},
 	}
 }
@@ -426,19 +431,19 @@ func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (string, *p
 		Term:         r.server.currentTerm(),
 		LeaderId:     r.server.id,
 		LeaderCommit: r.server.commitIndex(),
-		PrevLogTerm:  0,
 		PrevLogIndex: 0,
+		PrevLogTerm:  0,
 		Entries:      []*pb.Log{},
 	}
 
 	if prevLogIndex := firstIndex - 1; prevLogIndex > 0 {
-		log, err := r.server.logProvider.Entry(prevLogIndex)
+		logMeta, err := r.server.logProvider.Meta(prevLogIndex)
 		if err != nil {
 			return "", nil, err
 		}
-		if log != nil {
-			request.PrevLogTerm = log.Meta.Term
-			request.PrevLogIndex = log.Meta.Index
+		if logMeta != nil {
+			request.PrevLogIndex = logMeta.Index
+			request.PrevLogTerm = logMeta.Term
 		}
 	}
 
