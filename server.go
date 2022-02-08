@@ -53,7 +53,8 @@ type serverChannels struct {
 	// commitCh receives updates on the commit index.
 	commitCh chan uint64
 
-	logOpsCh chan logProviderOp
+	logOpsCh     chan logProviderOp
+	logRestoreCh chan FutureTask[any, SnapshotMeta]
 
 	rpcCh chan *RPC
 
@@ -107,6 +108,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 			confCh:                 make(chan *Configuration, 16),
 			commitCh:               make(chan uint64, 16),
 			logOpsCh:               make(chan logProviderOp, 64),
+			logRestoreCh:           make(chan FutureTask[any, SnapshotMeta], 64),
 			rpcCh:                  make(chan *RPC, 16),
 			serveErrCh:             make(chan error, 8),
 			shutdownCh:             make(chan error, 8),
@@ -118,7 +120,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 		opts:             applyServerOpts(opts...),
 	}
 	// Set up the logger
-	server.logger = wrappedServerLogger(server.opts.logLevel)
+	server.logger = serverLogger(server.opts.logLevel)
 	go func() { <-terminalSignalCh(); _ = server.logger.Sync() }()
 
 	server.logProvider = newLogProviderProxy(server, coreOpts.LogProvider)
@@ -349,6 +351,8 @@ func (s *Server) runLoopLeader() {
 			default:
 				s.logger.Warnw("unknown logProviderOp", logFields(s)...)
 			}
+		case t := <-s.logRestoreCh:
+			t.setResult(nil, s.logProvider.Restore(t.Task()))
 		case rpc := <-s.trans.RPC():
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
@@ -362,6 +366,7 @@ func (s *Server) runLoopLeader() {
 			s.alterTerm(term)
 			return
 		case t := <-s.snapshotRestoreCh:
+			s.replScheduler.Stop()
 			t.setResult(s.snapshotService.Restore(t.Task()))
 		}
 		if s.shouldReselectLoop() {
@@ -428,6 +433,8 @@ func (s *Server) runLoopCandidate() {
 		case c := <-s.confCh:
 			s.alterConfiguration(c)
 			s.reselectLoop()
+		case t := <-s.logRestoreCh:
+			t.setResult(nil, s.logProvider.Restore(t.Task()))
 		case rpc := <-s.trans.RPC():
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
@@ -477,6 +484,8 @@ func (s *Server) runLoopFollower() {
 			default:
 				s.logger.Warnw("unknown log operation", logFields(s)...)
 			}
+		case t := <-s.logRestoreCh:
+			t.setResult(nil, s.logProvider.Restore(t.Task()))
 		case rpc := <-s.trans.RPC():
 			followerTimer.Reset(s.opts.followerTimeout)
 			go s.handleRPC(rpc)
@@ -671,7 +680,7 @@ func (s *Server) ApplyCommand(ctx context.Context, command Command) FutureTask[*
 // }
 
 func (s *Server) StateMachine() StateMachine {
-	return s.stateMachine
+	return s.stateMachine.StateMachine
 }
 
 func (s *Server) Id() string {
