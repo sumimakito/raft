@@ -76,31 +76,23 @@ func (s *LogProvider) AppendLogs(logs []*pb.Log) error {
 		if err != nil {
 			return err
 		}
-		key, _ := bucket.Cursor().Last()
-		var index uint64 = 1
-		if key != nil {
-			index = raft.DecodeUint64(key) + 1
-		}
 		for i := range logs {
 			logBytes, err := encodeLog(logs[i])
 			if err != nil {
 				return err
 			}
-			if err := bucket.Put(raft.EncodeUint64(index), logBytes); err != nil {
+			if err := bucket.Put(raft.EncodeUint64(logs[i].Meta.Index), logBytes); err != nil {
 				return err
 			}
-			if err := s.putLogIndex(t, logs[i].Body.Type, index); err != nil {
+			if err := s.putLogIndex(t, logs[i].Body.Type, logs[i].Meta.Index); err != nil {
 				return err
 			}
-			index++
 		}
 		return nil
 	})
 }
 
 func (s *LogProvider) TrimPrefix(index uint64) error {
-	s.DebugPrint()
-	defer s.DebugPrint()
 	return s.db.Update(func(t *bbolt.Tx) error {
 		bucket := t.Bucket([]byte(logStoreBucketLogs))
 		if bucket == nil {
@@ -268,6 +260,7 @@ func (s *LogProvider) DebugPrint() {
 			fmt.Println(raft.DecodeUint64(key), log)
 			key, value = c.Next()
 		}
+		fmt.Println()
 		return nil
 	}); err != nil {
 		panic(err)
