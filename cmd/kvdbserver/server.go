@@ -119,8 +119,6 @@ func main() {
 		log.Panic(err)
 	}
 
-	log.Println(server)
-
 	if err := server.Serve(); err != nil {
 		log.Panic(err)
 	}
