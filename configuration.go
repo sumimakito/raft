@@ -8,7 +8,7 @@ import (
 )
 
 type Config struct {
-	peerMap SingleFlight // map[string]Peer
+	peerMap SingleFlight[map[string]*pb.Peer]
 
 	*pb.Config
 }
@@ -22,13 +22,13 @@ func (c *Config) Copy() *Config {
 }
 
 func (c *Config) Contains(serverId string) bool {
-	peerMap := c.peerMap.Do(func() interface{} {
+	peerMap := c.peerMap.Do(func() map[string]*pb.Peer {
 		m := map[string]*pb.Peer{}
 		for _, p := range c.Peers {
 			m[p.Id] = p
 		}
 		return m
-	}).(map[string]*pb.Peer)
+	})
 	_, ok := peerMap[serverId]
 	return ok
 }
@@ -40,12 +40,12 @@ func (c *Config) Quorum() int {
 type Configuration struct {
 	logIndex uint64
 
-	peerMapSingle      SingleFlight
-	peersSingle        SingleFlight
-	currentPeersSingle SingleFlight
+	peerMapSingle      SingleFlight[map[string]*pb.Peer]
+	peersSingle        SingleFlight[[]*pb.Peer]
+	currentPeersSingle SingleFlight[[]*pb.Peer]
 
-	currentSingle SingleFlight
-	nextSingle    SingleFlight
+	currentSingle SingleFlight[*Config]
+	nextSingle    SingleFlight[*Config]
 
 	*pb.Configuration
 }
@@ -59,7 +59,7 @@ func (c *Configuration) Copy() *Configuration {
 }
 
 func (c *Configuration) peerMap() map[string]*pb.Peer {
-	return c.peerMapSingle.Do(func() interface{} {
+	return c.peerMapSingle.Do(func() map[string]*pb.Peer {
 		m := map[string]*pb.Peer{}
 		for i := range c.Current.Peers {
 			if _, ok := m[c.Current.Peers[i].Id]; ok {
@@ -76,39 +76,39 @@ func (c *Configuration) peerMap() map[string]*pb.Peer {
 			}
 		}
 		return m
-	}).(map[string]*pb.Peer)
+	})
 }
 
 func (c *Configuration) peers() []*pb.Peer {
 	if c.Next == nil || len(c.Next.Peers) == 0 {
-		return c.currentPeersSingle.Do(func() interface{} {
+		return c.currentPeersSingle.Do(func() []*pb.Peer {
 			peers := make([]*pb.Peer, 0, len(c.Current.Peers))
 			for _, p := range c.Current.Peers {
 				peers = append(peers, p)
 			}
 			return peers
-		}).([]*pb.Peer)
+		})
 	}
 
 	peerMap := c.peerMap()
-	return c.peersSingle.Do(func() interface{} {
+	return c.peersSingle.Do(func() []*pb.Peer {
 		peers := make([]*pb.Peer, 0, len(peerMap))
 		for _, p := range peerMap {
 			peers = append(peers, p)
 		}
 		return peers
-	}).([]*pb.Peer)
+	})
 }
 
 func (c *Configuration) CurrentConfig() *Config {
-	return c.currentSingle.Do(func() interface{} { return newConfig(c.Current) }).(*Config)
+	return c.currentSingle.Do(func() *Config { return newConfig(c.Current) })
 }
 
 func (c *Configuration) NextConfig() *Config {
 	if c.Next == nil {
 		return nil
 	}
-	return c.nextSingle.Do(func() interface{} { return newConfig(c.Next) }).(*Config)
+	return c.nextSingle.Do(func() *Config { return newConfig(c.Next) })
 }
 
 func (c *Configuration) Joint() bool {
