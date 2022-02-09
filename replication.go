@@ -16,7 +16,7 @@ type replCtl struct {
 type replState struct {
 	r             *replScheduler
 	peer          *pb.Peer
-	configuration *Configuration
+	configuration *configuration
 
 	nextIndex uint64
 
@@ -475,10 +475,10 @@ func (r *replScheduler) setMatchIndex(serverID string, matchIndex uint64) {
 	c := r.server.confStore.Latest()
 	r.matchIndexes.Store(serverID, matchIndex)
 	r.server.logger.Infow("setMatchIndex", zap.Object("conf", c))
-	r.server.updateCommitIndex(r.nextCommitIndexLocked(c))
+	r.server.alterCommitIndex(r.computeCommitIndex(c))
 }
 
-func (r *replScheduler) nextCommitIndexLocked(c *Configuration) uint64 {
+func (r *replScheduler) computeCommitIndex(c *configuration) uint64 {
 	matchIndexes := map[string]uint64{}
 	r.matchIndexes.Range(func(key, value any) bool {
 		matchIndexes[key.(string)] = value.(uint64)
