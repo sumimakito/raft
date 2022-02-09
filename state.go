@@ -1,6 +1,8 @@
 package raft
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+)
 
 type ServerRole uint32
 
@@ -103,11 +105,18 @@ func (server *Server) setShutdownState() bool {
 	return atomic.CompareAndSwapUint32(&server.serverState.stateShutdownState, 0, 1)
 }
 
+type lastAppliedTuple struct {
+	Index uint64
+	Term  uint64
+}
+
+var nilLastAppliedTuple = lastAppliedTuple{Index: 0, Term: 0}
+
 type commitState struct {
 	noCopy
 
-	aCommitIndex      uint64
-	aLastAppliedIndex uint64
+	aCommitIndex uint64
+	aLastApplied atomic.Value // lastAppliedTuple
 }
 
 func (state *commitState) commitIndex() uint64 {
@@ -118,10 +127,13 @@ func (state *commitState) setCommitIndex(commitIndex uint64) {
 	atomic.StoreUint64(&state.aCommitIndex, commitIndex)
 }
 
-func (state *commitState) lastAppliedIndex() uint64 {
-	return atomic.LoadUint64(&state.aCommitIndex)
+func (state *commitState) lastApplied() lastAppliedTuple {
+	if v := state.aLastApplied.Load(); v != nil {
+		return v.(lastAppliedTuple)
+	}
+	return nilLastAppliedTuple
 }
 
-func (state *commitState) setLastAppliedIndex(lastAppliedIndex uint64) {
-	atomic.StoreUint64(&state.aLastAppliedIndex, lastAppliedIndex)
+func (state *commitState) setLastApplied(index, term uint64) {
+	state.aLastApplied.Store(lastAppliedTuple{Index: index, Term: term})
 }
