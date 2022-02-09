@@ -30,6 +30,7 @@ type SnapshotMeta interface {
 	Index() uint64
 	Term() uint64
 	Configuration() *pb.Configuration
+	ConfigurationIndex() uint64
 	Encode() ([]byte, error)
 }
 
@@ -40,7 +41,7 @@ type SnapshotSink interface {
 }
 
 type SnapshotProvider interface {
-	Create(index, term uint64, c *pb.Configuration) (SnapshotSink, error)
+	Create(index, term uint64, c *pb.Configuration, cIndex uint64) (SnapshotSink, error)
 	List() ([]SnapshotMeta, error)
 	Open(id string) (Snapshot, error)
 	DecodeMeta(b []byte) (SnapshotMeta, error)
@@ -166,35 +167,33 @@ func (s *snapshotService) StopScheduler() {
 
 // TakeSnapshot is used to take a snapshot and trim log entries.
 func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
-	c := s.server.confStore.Latest()
+	c := s.server.confStore.Committed()
 
 	// Check if our latest snapshot is stale
 	if m := s.lastSnapshotMeta; m != nil {
-		s.server.logger.Infof("lastSnapshotMeta index=%d conf=%v", m.Index(), m.Configuration())
 		// Skip if the snapshot index and configuration are identical to current values.
-		if m.Index() >= s.server.lastAppliedIndex() && proto.Equal(m.Configuration(), c.Configuration) {
+		if m.Index() >= s.server.lastApplied().Index && proto.Equal(m.Configuration(), c.Configuration) {
 			s.server.logger.Debugw("snapshot skipped", logFields(s.server)...)
 			return nil, nil
 		}
 	}
 
-	stateMachineSnapshotFuture := newFutureTask[StateMachineSnapshot, any](nil)
-
+	stateMachineSnapshotFuture := newFutureTask[*stateMachineSnapshot, any](nil)
 	s.server.stateMachineSnapshotCh <- stateMachineSnapshotFuture
 	s.server.logger.Infow("enqueued state machine snapshot request", logFields(s.server)...)
 
-	smSnapshot, err := stateMachineSnapshotFuture.Result()
+	stmsSnapshot, err := stateMachineSnapshotFuture.Result()
 	if err != nil {
 		return nil, err
 	}
 
-	sink, err := s.server.snapshotProvider.Create(smSnapshot.Index(), smSnapshot.Term(), c.Configuration)
+	sink, err := s.server.snapshotProvider.Create(stmsSnapshot.Index, stmsSnapshot.Term, c.Configuration, c.LogIndex())
 	if err != nil {
 		return nil, err
 	}
 	snapshotMeta := sink.Meta()
 
-	if err := smSnapshot.Write(sink); err != nil {
+	if err := stmsSnapshot.Write(sink); err != nil {
 		if cancelError := sink.Cancel(); cancelError != nil {
 			return nil, errors.Wrap(cancelError, err.Error())
 		}
@@ -254,7 +253,7 @@ func (s *snapshotService) Restore(snapshotId string) (bool, error) {
 	s.server.setFirstLogIndex(Must2(s.server.logProvider.FirstIndex()))
 	s.server.setLastLogIndex(Must2(s.server.logProvider.LastIndex()))
 
-	s.server.alterConfiguration(newConfiguration(snapshotMeta.Configuration()))
+	s.server.alterConfiguration(newConfiguration(snapshotMeta.Configuration(), snapshotMeta.ConfigurationIndex()))
 	s.server.reselectLoop()
 	return true, nil
 }

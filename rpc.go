@@ -236,7 +236,9 @@ func (h *rpcHandler) InstallSnapshot(
 		return nil, err
 	}
 
-	sink, err := h.server.snapshotProvider.Create(snapshotMeta.Index(), snapshotMeta.Term(), snapshotMeta.Configuration())
+	sink, err := h.server.snapshotProvider.Create(
+		snapshotMeta.Index(), snapshotMeta.Term(),
+		snapshotMeta.Configuration(), snapshotMeta.ConfigurationIndex())
 	if err != nil {
 		return nil, err
 	}

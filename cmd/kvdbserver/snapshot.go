@@ -91,6 +91,10 @@ func (m *SnapshotMeta) SetConfiguration(configuration *pb.Configuration) {
 	m.pbMetadata.Configuration = configuration
 }
 
+func (m *SnapshotMeta) ConfigurationIndex() uint64 {
+	return m.pbMetadata.ConfigurationIndex
+}
+
 func (m *SnapshotMeta) Size() uint64 {
 	return m.pbMetadata.Size
 }
@@ -256,7 +260,7 @@ func (s *SnapshotProvider) sortMeta(dirnames []string) ([]raft.SnapshotMeta, err
 	return metadataList, nil
 }
 
-func (s *SnapshotProvider) Create(index, term uint64, c *pb.Configuration) (raft.SnapshotSink, error) {
+func (s *SnapshotProvider) Create(index, term uint64, c *pb.Configuration, cIndex uint64) (raft.SnapshotSink, error) {
 	id := raft.NewObjectID().Hex()
 
 	wipDir := filepath.Join(s.storeDir, fmt.Sprintf("inprogress-%s", id))
@@ -268,10 +272,11 @@ func (s *SnapshotProvider) Create(index, term uint64, c *pb.Configuration) (raft
 
 	sink := newSnapshotSink(wipDir, finalDir, &SnapshotMeta{
 		pbMetadata: &kvdbpb.SnapshotMeta{
-			Id:            id,
-			Index:         index,
-			Term:          term,
-			Configuration: c.Copy(),
+			Id:                 id,
+			Index:              index,
+			Term:               term,
+			Configuration:      c.Copy(),
+			ConfigurationIndex: cIndex,
 		},
 	})
 

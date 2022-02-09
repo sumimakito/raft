@@ -11,6 +11,7 @@ message SnapshotMeta {
   uint64 term = 2;
   uint64 index = 3;
   Configuration configuration = 4;
-  uint64 size = 5;
-  uint64 crc64 = 6;
+  uint64 configuration_index = 5;
+  uint64 size = 6;
+  uint64 crc64 = 7;
 }
