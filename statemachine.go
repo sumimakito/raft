@@ -1,15 +1,19 @@
 package raft
 
 type StateMachine interface {
-	Apply(index, term uint64, command Command)
+	Apply(command Command)
 	Snapshot() (StateMachineSnapshot, error)
 	Restore(snapshot Snapshot) error
 }
 
 type StateMachineSnapshot interface {
-	Index() uint64
-	Term() uint64
 	Write(sink SnapshotSink) error
+}
+
+type stateMachineSnapshot struct {
+	StateMachineSnapshot
+	Index uint64
+	Term  uint64
 }
 
 // stateMachineProxy acts as a proxy between the underlying StateMachine and
@@ -26,7 +30,16 @@ func newStateMachineProxy(server *Server, stateMachine StateMachine) *stateMachi
 // Apply receives a command and its containing log's index and term, apply the
 // command to the underlying StateMachine and records the index and term.
 // Unsafe for concurrent use.
-func (a *stateMachineProxy) Apply(index, term uint64, command Command) {
-	a.StateMachine.Apply(index, term, command)
+func (a *stateMachineProxy) Apply(command Command) {
+	a.StateMachine.Apply(command)
 	a.server.snapshotService.Scheduler().CountApply()
+}
+
+func (a *stateMachineProxy) Snapshot() (*stateMachineSnapshot, error) {
+	s, err := a.StateMachine.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	lastApplied := a.server.lastApplied()
+	return &stateMachineSnapshot{StateMachineSnapshot: s, Index: lastApplied.Index, Term: lastApplied.Term}, nil
 }

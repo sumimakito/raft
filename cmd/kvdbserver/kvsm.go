@@ -18,7 +18,7 @@ func NewKVSM() *KVSM {
 	return &KVSM{states: map[string][]byte{}}
 }
 
-func (m *KVSM) Apply(index, term uint64, command raft.Command) {
+func (m *KVSM) Apply(command raft.Command) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cmd := DecodeCommand(command)
@@ -28,8 +28,6 @@ func (m *KVSM) Apply(index, term uint64, command raft.Command) {
 	case CommandUnset:
 		delete(m.states, cmd.Key)
 	}
-	m.index = index
-	m.term = term
 }
 
 func (m *KVSM) Keys() (keys []string) {
