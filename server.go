@@ -46,7 +46,7 @@ type serverStepdownChan chan uint64
 type serverChannels struct {
 	noCopy
 
-	confCh chan *Configuration
+	confCh chan *configuration
 
 	// appendLogsCh chan FutureTask[[]*pb.LogMeta, []*pb.LogBody]
 
@@ -64,7 +64,7 @@ type serverChannels struct {
 	snapshotRestoreCh chan FutureTask[bool, string]
 
 	// stateMachineSnapshotCh is used to trigger a snapshot on the state machine.
-	stateMachineSnapshotCh chan FutureTask[StateMachineSnapshot, any]
+	stateMachineSnapshotCh chan FutureTask[*stateMachineSnapshot, any]
 }
 
 type Server struct {
@@ -105,7 +105,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 		serverState: serverState{stateRole: Follower},
 		commitState: commitState{},
 		serverChannels: serverChannels{
-			confCh:                 make(chan *Configuration, 16),
+			confCh:                 make(chan *configuration, 16),
 			commitCh:               make(chan uint64, 16),
 			logOpsCh:               make(chan logProviderOp, 64),
 			logRestoreCh:           make(chan FutureTask[any, SnapshotMeta], 64),
@@ -113,7 +113,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 			serveErrCh:             make(chan error, 8),
 			shutdownCh:             make(chan error, 8),
 			snapshotRestoreCh:      make(chan FutureTask[bool, string], 8),
-			stateMachineSnapshotCh: make(chan FutureTask[StateMachineSnapshot, any], 16),
+			stateMachineSnapshotCh: make(chan FutureTask[*stateMachineSnapshot, any], 16),
 		},
 		trans:            coreOpts.Transport,
 		snapshotProvider: coreOpts.SnapshotProvider,
@@ -147,7 +147,7 @@ func (s *Server) alterCommitIndex(commitIndex uint64) {
 	s.commitCh <- commitIndex
 }
 
-func (s *Server) alterConfiguration(c *Configuration) {
+func (s *Server) alterConfiguration(c *configuration) {
 	s.confStore.SetLatest(c)
 	s.logger.Infow("configuration has been updated", logFields(s, zap.Reflect("configuration", c))...)
 }
@@ -202,7 +202,7 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
 		}
 	}
 
-	var conf *Configuration
+	var conf *configuration
 	if lastConfArrayIndex < len(logs) {
 		log := logs[lastConfArrayIndex]
 		var pbConfiguration pb.Configuration
@@ -210,8 +210,7 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
 			// Errors here are not fatal
 			return nil, err
 		}
-		conf = newConfiguration(&pbConfiguration)
-		conf.logIndex = log.Meta.Index
+		conf = newConfiguration(&pbConfiguration, log.Meta.Index)
 	}
 
 	if err := s.logProvider.AppendLogs(logs); err != nil {
@@ -229,6 +228,55 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
 		s.reselectLoop()
 	}
 	return logMeta, nil
+}
+
+func (s *Server) commitAndApply(commitIndex uint64) {
+	s.logger.Infow("ready to update commit index", logFields(s, "new_commit_index", commitIndex)...)
+	if commitIndex > s.lastLogIndex() {
+		// Commit index should never overflow the log index.
+		commitIndex = s.lastLogIndex()
+	}
+	lastApplied := s.lastApplied()
+	if lastApplied.Index == commitIndex {
+		s.logger.Infow("lastAppliedIndex == commitIndex, there's nothing to apply", logFields(s)...)
+		return
+	}
+	if lastApplied.Index > commitIndex {
+		s.logger.Panicw("confusing condition: lastAppliedIndex > commitIndex", logFields(s)...)
+	}
+	s.setCommitIndex(commitIndex)
+	firstIndex := lastApplied.Index + 1
+	s.logger.Infow("ready to apply logs", logFields(s, "first_index", firstIndex, "last_index", commitIndex)...)
+	var commitTerm uint64
+	var lastConfigurationLog *pb.Log
+	for i := firstIndex; i <= commitIndex; i++ {
+		log := Must2(s.logProvider.Entry(i))
+		if log == nil {
+			// We've found one or more gaps in the logs
+			s.logger.Panicw("one or more log gaps are detected", logFields(s, "missing_index", i)...)
+		}
+		if i == commitIndex {
+			commitTerm = log.Meta.Term
+		}
+		switch log.Body.Type {
+		case pb.LogType_COMMAND:
+			s.stateMachine.Apply(log.Body.Data)
+		case pb.LogType_CONFIGURATION:
+			lastConfigurationLog = log
+		}
+	}
+	if log := lastConfigurationLog; log != nil {
+		// If the latest configuration is in a joint consensus, commit the joint consensus
+		// and append the post-transition configuration.
+		if latest := s.confStore.Latest(); latest.Joint() && latest.LogIndex() == log.Meta.Index {
+			Must1(s.confStore.CommitTransition())
+		}
+		var pbConfiguration pb.Configuration
+		proto.Unmarshal(log.Body.Data, &pbConfiguration)
+		s.confStore.SetCommitted(newConfiguration(&pbConfiguration, log.Meta.Index))
+	}
+	s.setLastApplied(commitIndex, commitTerm)
+	s.logger.Infow("logs has been applied", logFields(s, "first_index", firstIndex, "last_index", commitIndex)...)
 }
 
 func (s *Server) handleRPC(rpc *RPC) {
@@ -331,7 +379,7 @@ func (s *Server) runLoopLeader() {
 	for s.role() == Leader {
 		select {
 		case commitIndex := <-s.commitCh:
-			s.updateCommitIndex(commitIndex)
+			s.commitAndApply(commitIndex)
 		case c := <-s.confCh:
 			s.alterConfiguration(c)
 			s.reselectLoop()
@@ -429,7 +477,7 @@ func (s *Server) runLoopCandidate() {
 			voteCancel()
 			return
 		case commitIndex := <-s.commitCh:
-			s.updateCommitIndex(commitIndex)
+			s.commitAndApply(commitIndex)
 		case c := <-s.confCh:
 			s.alterConfiguration(c)
 			s.reselectLoop()
@@ -464,7 +512,7 @@ func (s *Server) runLoopFollower() {
 			s.alterRole(Candidate)
 			s.reselectLoop()
 		case commitIndex := <-s.commitCh:
-			s.updateCommitIndex(commitIndex)
+			s.commitAndApply(commitIndex)
 		case c := <-s.confCh:
 			s.alterConfiguration(c)
 			s.reselectLoop()
@@ -572,48 +620,6 @@ func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.Cancel
 
 func (s *Server) startMetrics(exporter MetricsExporter) {
 
-}
-
-func (s *Server) updateCommitIndex(commitIndex uint64) {
-	s.logger.Infow("ready to update commit index", logFields(s, "new_commit_index", commitIndex)...)
-	if commitIndex > s.lastLogIndex() {
-		// Commit index should never overflow the log index.
-		commitIndex = s.lastLogIndex()
-	}
-	lastAppliedIndex := s.lastAppliedIndex()
-	if lastAppliedIndex == commitIndex {
-		s.logger.Infow("lastAppliedIndex == commitIndex, there's nothing to apply", logFields(s)...)
-		return
-	}
-	if lastAppliedIndex > commitIndex {
-		s.logger.Panicw("confusing condition: lastAppliedIndex > commitIndex", logFields(s)...)
-	}
-	s.setCommitIndex(commitIndex)
-	firstIndex := lastAppliedIndex + 1
-	s.logger.Infow("ready to apply logs", logFields(s, "first_index", firstIndex, "last_index", commitIndex)...)
-	for i := firstIndex; i <= commitIndex; i++ {
-		log := Must2(s.logProvider.Entry(i))
-		if log == nil {
-			// We've found one or more gaps in the logs
-			s.logger.Panicw("one or more log gaps are detected", logFields(s, "missing_index", i)...)
-		}
-		switch log.Body.Type {
-		case pb.LogType_COMMAND:
-			s.stateMachine.Apply(log.Meta.Index, log.Meta.Term, log.Body.Data)
-		case pb.LogType_CONFIGURATION:
-			var pbConfiguration pb.Configuration
-			Must1(proto.Unmarshal(log.Body.Data, &pbConfiguration))
-			c := newConfiguration(&pbConfiguration)
-			c.logIndex = log.Meta.Index
-			// If the latest configuration is in a joint consensus, commit the joint consensus
-			// and append the post-transition configuration.
-			if latest := s.confStore.Latest(); latest.Joint() && latest.logIndex == log.Meta.Index {
-				Must1(s.confStore.CommitTransition())
-			}
-		}
-	}
-	s.setLastAppliedIndex(commitIndex)
-	s.logger.Infow("logs has been applied", logFields(s, "first_index", firstIndex, "last_index", commitIndex)...)
 }
 
 // Apply.
