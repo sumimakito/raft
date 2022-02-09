@@ -567,7 +567,6 @@ func (r *replScheduler) Start(stepdownCh serverStepdownChan) {
 				configuration: c,
 				nextIndex:     r.server.lastLogIndex() + 1,
 			}
-			r.matchIndexes.Store(p.Id, r.server.lastLogIndex())
 		} else {
 			r.states[p.Id] = &replState{
 				r:             r,
@@ -575,8 +574,8 @@ func (r *replScheduler) Start(stepdownCh serverStepdownChan) {
 				configuration: c,
 				nextIndex:     r.server.lastLogIndex(), // To start replication to non-self peers immediately
 			}
-			r.matchIndexes.Store(p.Id, uint64(0))
 		}
+		r.matchIndexes.Store(p.Id, uint64(0))
 	}
 	for _, s := range r.states {
 		s.Replicate(replId, stepdownCh)
