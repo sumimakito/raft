@@ -35,6 +35,7 @@ type ServerStates struct {
 
 type ServerCoreOptions struct {
 	Id               string
+	InitialCluster   []*pb.Peer
 	LogProvider      LogProvider
 	StateMachine     StateMachine
 	SnapshotProvider SnapshotProvider
@@ -64,10 +65,11 @@ type serverChannels struct {
 }
 
 type Server struct {
-	id        string
-	opts      *serverOptions
-	serveFlag uint32
-	logger    *zap.SugaredLogger
+	id             string
+	initialCluster []*pb.Peer
+	opts           *serverOptions
+	serveFlag      uint32
+	logger         *zap.SugaredLogger
 
 	clusterLeader atomic.Value // *Peer
 
@@ -96,10 +98,19 @@ type Server struct {
 }
 
 func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error) {
+	var initialCluster []*pb.Peer
+	if coreOpts.InitialCluster != nil {
+		initialCluster = make([]*pb.Peer, 0, len(coreOpts.InitialCluster))
+		for _, p := range coreOpts.InitialCluster {
+			initialCluster = append(initialCluster, p.Copy())
+		}
+	}
+
 	server := &Server{
-		id:          coreOpts.Id,
-		serverState: serverState{stateRole: Follower},
-		commitState: commitState{},
+		id:             coreOpts.Id,
+		initialCluster: initialCluster,
+		serverState:    serverState{stateRole: Follower},
+		commitState:    commitState{},
 		serverChannels: serverChannels{
 			commitCh:               make(chan uint64, 16),
 			logOpsCh:               make(chan logProviderOp, 64),
@@ -114,9 +125,11 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 		snapshotProvider: coreOpts.SnapshotProvider,
 		opts:             applyServerOpts(opts...),
 	}
+
 	// Set up the logger
 	server.logger = serverLogger(server.opts.logLevel)
 
+	// Set up the log provider
 	server.logProvider = newLogProviderProxy(server, coreOpts.LogProvider)
 	server.stable = newStableStore(server)
 	if err := server.restoreStates(); err != nil {
@@ -124,6 +137,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 	}
 
 	server.apiServer = newAPIServer(server, server.opts.apiExtensions...)
+	// Recover the configuration store using the log provider.
 	if confStore, err := newConfigurationStore(server); err != nil {
 		return nil, err
 	} else {
@@ -134,6 +148,61 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 	server.rpcHandler = newRPCHandler(server)
 	server.stateMachine = newStateMachineProxy(server, coreOpts.StateMachine)
 
+	// Restore using the latest snapshot (if any).
+	snapshotMetaList, err := server.snapshotProvider.List()
+	if err != nil {
+		return nil, err
+	}
+	if len(snapshotMetaList) > 0 {
+		snapshotMeta := snapshotMetaList[0]
+		ok, err := server.snapshotService.Restore(snapshotMeta.Id())
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			server.logger.Infow("restored from snapshot",
+				logFields(server, zap.Any("snapshot_meta", snapshotMeta))...)
+		} else {
+			server.logger.Infow("snapshot exists but not used for restoration",
+				logFields(server, zap.Any("snapshot_meta", snapshotMeta))...)
+		}
+	}
+
+	conf := server.confStore.Latest()
+
+	if len(conf.Peers()) > 0 {
+		// Restore cluster from saved configuration.
+		selfRegistered := false
+		for _, peer := range conf.Peers() {
+			if server.id == peer.Id {
+				// Check for an edge condition
+				if server.Endpoint() != peer.Endpoint {
+					server.logger.Panicw("confusing condition: two servers have the same ID but different endpoints",
+						logFields(server)...)
+				}
+				break
+			}
+		}
+		if !selfRegistered {
+			server.logger.Warnw("the server is not in the latest configuration's peer list", logFields(server)...)
+		}
+	} else {
+		// The latest configuration does not contain any peers.
+		// The server should be the first node in the cluster.
+		pbConfiguration := &pb.Configuration{
+			Current: &pb.Config{Peers: server.initialCluster},
+		}
+		configurationBytes, err := proto.Marshal(pbConfiguration)
+		if err != nil {
+			return nil, err
+		}
+		pbLogBody := &pb.LogBody{Type: pb.LogType_CONFIGURATION, Data: configurationBytes}
+		if _, err := server.appendLogs([]*pb.LogBody{pbLogBody}); err != nil {
+			server.logger.Panicw("error occurred bootstrapping configuration for ourself",
+				logFields(server, zap.Error(err))...)
+		}
+	}
+
 	return server, nil
 }
 
@@ -141,8 +210,11 @@ func (s *Server) alterCommitIndex(commitIndex uint64) {
 	s.commitCh <- commitIndex
 }
 
+// alterConfiguration changes the latest configuration the server uses.
+// Loop re-selection will be marked as needed after calling alterConfiguration().
 func (s *Server) alterConfiguration(c *configuration) {
 	s.confStore.SetLatest(c)
+	s.reselectLoop()
 	s.logger.Infow("configuration has been updated", logFields(s, zap.Reflect("configuration", c))...)
 }
 
@@ -218,8 +290,10 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
 
 	// Special process is necessary if configuration logs are discovered.
 	if conf != nil {
+		// Stop the replication ...
+		s.replScheduler.Stop()
+		// And alter the configuration
 		s.alterConfiguration(conf)
-		s.reselectLoop()
 	}
 	return logMeta, nil
 }
@@ -456,8 +530,6 @@ func (s *Server) runLoopCandidate() {
 
 	currentVotes := 0
 	nextVotes := 0
-
-	c := s.confStore.Latest()
 
 	for s.role() == Candidate {
 		select {
@@ -733,46 +805,6 @@ func (s *Server) Serve() error {
 
 	go s.handleTerminal()
 
-	c := s.confStore.Latest()
-
-	// The server must be the first node in a cluster or a node in a restored cluster.
-	if len(c.Peers()) > 0 {
-		// The latest configuration holds a non-empty peer list.
-		// The server should be a node in a restored cluster.
-		selfRegistered := false
-		for _, peer := range c.Peers() {
-			if s.id == peer.Id {
-				// Check for an edge condition
-				if s.Endpoint() != peer.Endpoint {
-					s.logger.Panicw("confusing condition: two servers have the same ID but different endpoints",
-						logFields(s)...)
-				}
-				break
-			}
-		}
-		if !selfRegistered {
-			s.logger.Panicw("the server is not in the latest configuration's peer list", logFields(s)...)
-		}
-	} else {
-		// The latest configuration does not contain any peers.
-		// The server should be the first node in the cluster.
-		pbConfiguration := &pb.Configuration{
-			Current: &pb.Config{
-				Peers: []*pb.Peer{{Id: s.id, Endpoint: s.Endpoint()}},
-			},
-		}
-		configurationBytes, err := proto.Marshal(pbConfiguration)
-		if err != nil {
-			return err
-		}
-		if _, err := s.appendLogs([]*pb.LogBody{
-			{Type: pb.LogType_CONFIGURATION, Data: configurationBytes},
-		}); err != nil {
-			s.logger.Panicw("error occurred bootstrapping configuration for ourself",
-				logFields(s, zap.Error(err))...)
-		}
-	}
-
 	if s.opts.metricsExporter != nil {
 		go s.startMetrics(s.opts.metricsExporter)
 	}
@@ -785,6 +817,7 @@ func (s *Server) Serve() error {
 
 	go s.serveAPIServer()
 
+	s.snapshotService.Start()
 	go s.runMainLoop()
 
 	return <-s.serveErrCh
