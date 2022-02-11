@@ -116,10 +116,6 @@ CHECK_INDEX:
 	if lastLogIndex >= s.nextIndex {
 		goto REPLICATE
 	}
-	s.r.server.logger.Infow("no entries to replicate",
-		logFields(s.r.server,
-			zap.String("replication_id", ctl.replId),
-			zap.Object("peer", s.peer))...)
 
 	// HEARTBEAT
 	{
@@ -130,15 +126,10 @@ CHECK_INDEX:
 		}
 
 		heartbeatRequestId, heartbeaRequest := s.r.prepareHeartbeat()
-		s.r.server.logger.Debugw("send heartbeat request",
-			logFields(s.r.server,
-				zap.String("replication_id", ctl.replId),
-				zap.Object("peer", s.peer),
-				zap.String("request_id", heartbeatRequestId),
-				zap.Reflect("request", heartbeaRequest))...)
+
 		heartbeatResponse, err := s.r.server.trans.AppendEntries(ctl.Context(), s.peer, heartbeaRequest)
 		if err != nil {
-			s.r.server.logger.Infow("error sending heartbeat request",
+			s.r.server.logger.Debugw("error sending heartbeat request",
 				logFields(s.r.server,
 					zap.Error(err),
 					zap.String("replication_id", ctl.replId),
@@ -166,7 +157,7 @@ REPLICATE:
 
 		replicationRequestId, replicationRequest, err := s.r.prepareRequest(s.nextIndex, lastLogIndex)
 		if err != nil {
-			s.r.server.logger.Infow("error preparing replication request",
+			s.r.server.logger.Debugw("error preparing replication request",
 				logFields(s.r.server,
 					zap.Error(err),
 					zap.String("replication_id", ctl.replId),
@@ -175,15 +166,10 @@ REPLICATE:
 					zap.Reflect("request", replicationRequest))...)
 			goto RESET_LOOP
 		}
-		s.r.server.logger.Debugw("send replication request",
-			logFields(s.r.server,
-				zap.String("replication_id", ctl.replId),
-				zap.Object("peer", s.peer),
-				zap.String("request_id", replicationRequestId),
-				zap.Reflect("request", replicationRequest))...)
+
 		replicationResponse, err := s.r.server.trans.AppendEntries(ctl.Context(), s.peer, replicationRequest)
 		if err != nil {
-			s.r.server.logger.Infow("error sending replication request",
+			s.r.server.logger.Debugw("error sending replication request",
 				logFields(s.r.server,
 					zap.Error(err),
 					zap.String("replication_id", ctl.replId),
@@ -201,12 +187,6 @@ REPLICATE:
 
 		switch replicationResponse.Status {
 		case pb.ReplStatus_REPL_OK:
-			s.r.server.logger.Debugw("successful replication response",
-				logFields(s.r.server,
-					zap.String("replication_id", ctl.replId),
-					zap.Object("peer", s.peer),
-					zap.String("request_id", replicationRequestId),
-					zap.Reflect("response", replicationResponse))...)
 			s.nextIndex = lastLogIndex + 1
 			s.r.setMatchIndex(s.peer.Id, lastLogIndex)
 			goto RESET_LOOP
@@ -306,7 +286,7 @@ REPLICATE:
 					zap.Error(err),
 					zap.String("replication_id", ctl.replId),
 					zap.Object("peer", s.peer),
-					zap.String("snapshot_id", snapshotMeta.Id()))...)
+					zap.Reflect("snapshot_meta", snapshot.Meta))...)
 			snapshot.Close()
 			goto NEXT_MOVE_FORWARD
 		}
@@ -326,10 +306,16 @@ REPLICATE:
 					zap.Error(err),
 					zap.String("replication_id", ctl.replId),
 					zap.Object("peer", s.peer),
-					zap.String("snapshot_id", snapshotMeta.Id()))...)
+					zap.Reflect("snapshot_meta", snapshot.Meta))...)
 			snapshot.Close()
 			goto NEXT_MOVE_FORWARD
 		}
+
+		s.r.server.logger.Infow("ready to install snapshot",
+			logFields(s.r.server,
+				zap.String("replication_id", ctl.replId),
+				zap.Object("peer", s.peer),
+				zap.Reflect("snapshot_meta", snapshotMeta))...)
 
 		installSnapshotResponse, err := s.r.server.trans.InstallSnapshot(
 			ctl.Context(), s.peer, installSnapshotRequestMeta, snapshotReader,
@@ -340,7 +326,7 @@ REPLICATE:
 					zap.Error(err),
 					zap.String("replication_id", ctl.replId),
 					zap.Object("peer", s.peer),
-					zap.String("snapshot_id", snapshotMeta.Id()))...)
+					zap.Reflect("snapshot_meta", snapshotMeta))...)
 			snapshot.Close()
 			goto NEXT_MOVE_FORWARD
 		}
@@ -355,7 +341,7 @@ REPLICATE:
 			logFields(s.r.server,
 				zap.String("replication_id", ctl.replId),
 				zap.Object("peer", s.peer),
-				zap.String("snapshot_id", snapshotMeta.Id()))...)
+				zap.Reflect("snapshot_meta", snapshot.Meta))...)
 
 		s.nextIndex = snapshotMeta.Index() + 1
 		s.r.setMatchIndex(s.peer.Id, snapshotMeta.Index())
@@ -424,7 +410,6 @@ func (r *replScheduler) prepareHeartbeat() (string, *pb.AppendEntriesRequest) {
 }
 
 func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (string, *pb.AppendEntriesRequest, error) {
-	r.server.logger.Infof("prepareRequest(%d, %d)", firstIndex, lastIndex)
 	requestId := NewObjectID().Hex()
 
 	request := &pb.AppendEntriesRequest{
@@ -441,10 +426,8 @@ func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (string, *p
 		if err != nil {
 			return "", nil, err
 		}
-		if logMeta != nil {
-			request.PrevLogIndex = logMeta.Index
-			request.PrevLogTerm = logMeta.Term
-		}
+		request.PrevLogIndex = logMeta.Index
+		request.PrevLogTerm = logMeta.Term
 	}
 
 	lastLogIndex := r.server.lastLogIndex()
@@ -474,7 +457,6 @@ func (r *replScheduler) matchIndex(serverId string) uint64 {
 func (r *replScheduler) setMatchIndex(serverID string, matchIndex uint64) {
 	c := r.server.confStore.Latest()
 	r.matchIndexes.Store(serverID, matchIndex)
-	r.server.logger.Infow("setMatchIndex", zap.Object("conf", c))
 	r.server.alterCommitIndex(r.computeCommitIndex(c))
 }
 
@@ -484,8 +466,6 @@ func (r *replScheduler) computeCommitIndex(c *configuration) uint64 {
 		matchIndexes[key.(string)] = value.(uint64)
 		return true
 	})
-
-	r.server.logger.Infow("matchIndexes", "matchIndexes", matchIndexes)
 
 	if !c.Joint() {
 		currentIndexes := make([]uint64, 0, len(c.Current.Peers))
@@ -501,8 +481,6 @@ func (r *replScheduler) computeCommitIndex(c *configuration) uint64 {
 		}
 		sort.SliceStable(currentIndexes, func(i, j int) bool { return currentIndexes[i] > currentIndexes[j] })
 		commitIndex := currentIndexes[c.CurrentConfig().Quorum()-1]
-		r.server.logger.Infow("next commit index",
-			logFields(r.server, zap.Uint64("next_commit_index", commitIndex))...)
 		return commitIndex
 	} else {
 		currentIndexes := make([]uint64, 0, len(c.Current.Peers))
@@ -536,8 +514,6 @@ func (r *replScheduler) computeCommitIndex(c *configuration) uint64 {
 				}
 			}
 		}
-		r.server.logger.Info("currentIndexes", currentIndexes)
-		r.server.logger.Info("nextIndexes", nextIndexes)
 		sort.SliceStable(currentIndexes, func(i, j int) bool { return currentIndexes[i] > currentIndexes[j] })
 		sort.SliceStable(nextIndexes, func(i, j int) bool { return nextIndexes[i] > nextIndexes[j] })
 		commitIndex := currentIndexes[c.CurrentConfig().Quorum()-1]
