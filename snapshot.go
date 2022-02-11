@@ -176,11 +176,18 @@ func (s *snapshotService) StopScheduler() {
 func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
 	c := s.server.confStore.Committed()
 
+	lastApplied := s.server.lastApplied()
+	if lastApplied.Index == 0 {
+		// It's unnecessary to take a snapshot since there're no applied logs.
+		s.server.logger.Debugw("snapshot skipped: no applied logs", logFields(s.server)...)
+		return nil, nil
+	}
+
 	// Check if our latest snapshot is stale
 	if m := s.lastSnapshotMeta; m != nil {
 		// Skip if the snapshot index and configuration are identical to current values.
-		if m.Index() >= s.server.lastApplied().Index && proto.Equal(m.Configuration(), c.Configuration) {
-			s.server.logger.Debugw("snapshot skipped", logFields(s.server)...)
+		if m.Index() >= lastApplied.Index && proto.Equal(m.Configuration(), c.Configuration) {
+			s.server.logger.Debugw("snapshot skipped: snapshot is not stale", logFields(s.server)...)
 			return nil, nil
 		}
 	}
