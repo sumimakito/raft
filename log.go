@@ -52,11 +52,10 @@ type logProviderTrimOp struct {
 
 func (*logProviderTrimOp) __logProviderOp() {}
 
-// logProviderProxy works as a proxy for the underlying log store and takes the
-// snapshot currently in use into account.
+// logProviderProxy works as a proxy for the underlying log provider.
 type logProviderProxy struct {
-	server *Server
 	LogProvider
+	server       *Server
 	snapshotMeta SnapshotMeta
 }
 
@@ -115,6 +114,17 @@ func (l *logProviderProxy) LastIndex() (uint64, error) {
 	return 0, nil
 }
 
+func (l *logProviderProxy) Entry(index uint64) (*pb.Log, error) {
+	if l.snapshotMeta != nil {
+		// Ensure the index is not in the snapshot's range.
+		// If so, we cannot do anything.
+		if index < l.snapshotMeta.Index() {
+			l.server.logger.Panicw("called Entry() with an index compacted by the snapshot", logFields(l.server)...)
+		}
+	}
+	return l.LogProvider.Entry(index)
+}
+
 // Meta is used to get the log meta at the index. A valid index should be in
 // the range of the last log index in the snapshot, if any, or the first
 // unpacked log index to the last unpacked log index, if any, or the last log
@@ -124,7 +134,7 @@ func (l *logProviderProxy) Meta(index uint64) (*pb.LogMeta, error) {
 		if index == l.snapshotMeta.Index() {
 			return &pb.LogMeta{Index: l.snapshotMeta.Index(), Term: l.snapshotMeta.Term()}, nil
 		} else if index < l.snapshotMeta.Index() {
-			return nil, nil
+			l.server.logger.Panicw("called Meta() with an index compacted by the snapshot", logFields(l.server)...)
 		}
 	}
 	e, err := l.LogProvider.Entry(index)
@@ -137,13 +147,16 @@ func (l *logProviderProxy) Meta(index uint64) (*pb.LogMeta, error) {
 	return e.Meta, nil
 }
 
-func (l *logProviderProxy) Entry(index uint64) (*pb.Log, error) {
-	if l.snapshotMeta != nil {
-		// Ensure the index is not in the snapshot's range.
-		// If so, we cannot do anything.
-		if index < l.snapshotMeta.Index() {
-			l.server.logger.Panicw("called Entry() with an index exists in the snapshot", logFields(l.server)...)
-		}
+func (l *logProviderProxy) withinCompacted(index uint64) bool {
+	if l.snapshotMeta == nil {
+		return false
 	}
-	return l.LogProvider.Entry(index)
+	return index < l.snapshotMeta.Index()
+}
+
+func (l *logProviderProxy) withinSnapshot(index uint64) bool {
+	if l.snapshotMeta == nil {
+		return false
+	}
+	return index <= l.snapshotMeta.Index()
 }

@@ -144,7 +144,7 @@ func newConfigurationStore(server *Server) (*configurationStore, error) {
 	c.latest.Store(nilConfiguration)
 
 	// Find the latest configuration
-	log, err := server.logProvider.LastTypedEntry(pb.LogType_CONFIGURATION)
+	log, err := server.logProvider.LastEntry(pb.LogType_CONFIGURATION)
 	if err != nil {
 		return nil, err
 	}

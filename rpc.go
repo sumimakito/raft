@@ -70,14 +70,14 @@ func (h *rpcHandler) AppendEntries(
 	}
 
 	if h.server.Leader().Id != request.LeaderId {
-		leaderPeer := h.server.confStore.Latest().Peer(request.LeaderId)
+		leaderPeer, _ := h.server.confStore.Latest().Peer(request.LeaderId)
 		h.server.alterLeader(leaderPeer)
 	}
 
 	if request.Term > h.server.currentTerm() {
 		h.server.logger.Debugw("local term is stale", logFields(h.server, "request_id", requestID)...)
 		if h.server.role() != Follower {
-			leaderPeer := h.server.confStore.Latest().Peer(request.LeaderId)
+			leaderPeer, _ := h.server.confStore.Latest().Peer(request.LeaderId)
 			h.server.stepdownFollower(leaderPeer)
 		}
 		h.server.alterTerm(request.Term)
@@ -85,6 +85,10 @@ func (h *rpcHandler) AppendEntries(
 	}
 
 	if request.PrevLogIndex > 0 {
+		if h.server.logProvider.withinCompacted(request.PrevLogIndex) {
+			h.server.logger.Panicw("previous log index is compacted by the snapshot",
+				logFields(h.server, "request_id", requestID, "request", request)...)
+		}
 		prevLogMeta, err := h.server.logProvider.Meta(request.PrevLogIndex)
 		if err != nil {
 			return nil, err
