@@ -116,7 +116,6 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 	}
 	// Set up the logger
 	server.logger = serverLogger(server.opts.logLevel)
-	go func() { <-terminalSignalCh(); _ = server.logger.Sync() }()
 
 	server.logProvider = newLogProviderProxy(server, coreOpts.LogProvider)
 	server.stable = newStableStore(server)
@@ -314,6 +313,7 @@ func (s *Server) internalShutdown(err error) {
 	} else {
 		s.logger.Infow(fmt.Sprintf("transport %T does not implement interface TransportCloser", s.trans), logFields(s)...)
 	}
+	_ = s.logger.Sync()
 	// Send err (if any) to the serve error channel
 	s.serveErrCh <- err
 }
