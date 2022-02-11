@@ -250,7 +250,7 @@ func (s *snapshotService) Restore(snapshotId string) (bool, error) {
 	}
 
 	// Check if the restoration is necessary.
-	if snapshotMeta.Index() < s.server.firstLogIndex() {
+	if snapshotMeta.Index() < s.server.firstLogIndex()-1 {
 		// Restoration is not necessary.
 		return false, nil
 	}
