@@ -434,6 +434,19 @@ func (s *Server) runLoopLeader() {
 func (s *Server) runLoopCandidate() {
 	s.logger.Infow("run candidate loop", logFields(s)...)
 
+	c := s.confStore.Latest()
+
+	if _, ok := c.Peer(s.id); !ok {
+		// We're not in the latest configuration.
+		// 1) A newly joined server is catching up with the leader.
+		// 2) The server is removed from the cluster.
+		s.logger.Infow("stay as a follower since current configuration does not include ourself",
+			logFields(s)...)
+		s.alterRole(Follower)
+		s.reselectLoop()
+		return
+	}
+
 	electionTimer := s.randomTimer(s.opts.electionTimeout)
 	voteResCh, voteCancel, err := s.startElection()
 	defer voteCancel()
