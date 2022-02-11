@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/sumimakito/raft"
 	"github.com/sumimakito/raft/grpctrans"
+	"github.com/sumimakito/raft/pb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/yaml.v3"
 )
 
 var logLevels = map[string]zapcore.Level{
@@ -24,6 +27,10 @@ var logLevels = map[string]zapcore.Level{
 	"dpanic": zap.DPanicLevel,
 	"panic":  zap.PanicLevel,
 	"fatal":  zap.FatalLevel,
+}
+
+type parsedClusterConfig struct {
+	Peers map[string]string `yaml:"peers"`
 }
 
 func main() {
@@ -37,27 +44,50 @@ func main() {
 		log.Panic(err)
 	}
 
+	var clusterConfig string
 	var logLevelName string
 	var pprofAddr string
 	var snapshotDir string
 	var stableDir string
+	flag.StringVar(&clusterConfig, "cluster", "",
+		"Path to the cluster config file.")
 	flag.StringVar(&logLevelName, "logLevel", "info",
-		"Specifies the logging level (available: debug, info, warn, error, dpanic, panic, fatal).")
+		"Logging level (available: debug, info, warn, error, dpanic, panic, fatal).")
 	flag.StringVar(&pprofAddr, "pprof", "",
 		"Address for pprof to listen on.")
 	flag.StringVar(&snapshotDir, "snapshotDir", filepath.Join(workDir, "snapshot"),
-		"Specifies the directory that snapshot files are kept in.")
+		"Directory for snapshot files.")
 	flag.StringVar(&stableDir, "stableDir", filepath.Join(workDir, "stable"),
-		"Specifies the directory that stable storage files are kept in.")
+		"Directory for stable storage files.")
 
 	flag.Parse()
 
 	if flag.NArg() < 2 {
-		fmt.Printf("Usage: %s [options...] <server ID> <RPC server address> <API server address>\n", os.Args[0])
+		fmt.Printf("Usage: %s [OPTIONS] <SERVER_ID> <RPC_ADDRESS> <API_ADDRESS>\n", os.Args[0])
 		fmt.Println()
 		fmt.Println("Options:")
 		flag.PrintDefaults()
 		os.Exit(0)
+	}
+
+	var cluster []*pb.Peer
+	if clusterConfig != "" {
+		func() {
+			file, err := os.Open(raft.PathJoin(workDir, clusterConfig))
+			if err != nil {
+				log.Panic(err)
+			}
+			defer file.Close()
+			b, err := ioutil.ReadAll(file)
+			if err != nil {
+				log.Panic(err)
+			}
+			var c parsedClusterConfig
+			yaml.Unmarshal(b, &c)
+			for id, endpoint := range c.Peers {
+				cluster = append(cluster, &pb.Peer{Id: id, Endpoint: endpoint})
+			}
+		}()
 	}
 
 	if pprofAddr != "" {
@@ -103,6 +133,7 @@ func main() {
 	server, err := raft.NewServer(
 		raft.ServerCoreOptions{
 			Id:               serverID,
+			InitialCluster:   cluster,
 			LogProvider:      logProvider,
 			StateMachine:     kvsm,
 			SnapshotProvider: snapshot,
