@@ -226,13 +226,16 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
 
 func (s *Server) commitAndApply(commitIndex uint64) {
 	s.logger.Infow("ready to update commit index", logFields(s, "new_commit_index", commitIndex)...)
+	if commitIndex < s.commitIndex() {
+		return
+	}
 	if commitIndex > s.lastLogIndex() {
 		// Commit index should never overflow the log index.
 		commitIndex = s.lastLogIndex()
 	}
 	lastApplied := s.lastApplied()
 	if lastApplied.Index == commitIndex {
-		s.logger.Infow("lastAppliedIndex == commitIndex, there's nothing to apply", logFields(s)...)
+		s.logger.Debugw("lastAppliedIndex == commitIndex, there's nothing to apply", logFields(s)...)
 		return
 	}
 	if lastApplied.Index > commitIndex {
@@ -244,6 +247,11 @@ func (s *Server) commitAndApply(commitIndex uint64) {
 	var commitTerm uint64
 	var lastConfigurationLog *pb.Log
 	for i := firstIndex; i <= commitIndex; i++ {
+		if s.logProvider.withinSnapshot(i) {
+			// Skip the log entry if its index is compacted by the snapshot.
+			commitTerm = s.logProvider.snapshotMeta.Term()
+			continue
+		}
 		log := Must2(s.logProvider.Entry(i))
 		if log == nil {
 			// We've found one or more gaps in the logs
@@ -260,17 +268,35 @@ func (s *Server) commitAndApply(commitIndex uint64) {
 		}
 	}
 	if log := lastConfigurationLog; log != nil {
-		// If the latest configuration is in a joint consensus, commit the joint consensus
-		// and append the post-transition configuration.
-		if latest := s.confStore.Latest(); latest.Joint() && latest.LogIndex() == log.Meta.Index {
-			Must1(s.confStore.CommitTransition())
-		}
 		var pbConfiguration pb.Configuration
 		proto.Unmarshal(log.Body.Data, &pbConfiguration)
 		s.confStore.SetCommitted(newConfiguration(&pbConfiguration, log.Meta.Index))
+		s.commitConfiguration(log.Meta.Index)
 	}
 	s.setLastApplied(commitIndex, commitTerm)
 	s.logger.Infow("logs has been applied", logFields(s, "first_index", firstIndex, "last_index", commitIndex)...)
+}
+
+// commitConfiguration is used when a configuration log has been committed.
+// Unsafe for concurrent use.
+func (s *Server) commitConfiguration(index uint64) {
+	if s.role() != Leader {
+		// Configuration commitment has nothing to do with non-leader servers.
+		return
+	}
+	latest := s.confStore.Latest()
+	if !latest.Joint() {
+		// The latest configuration is not a joint configuration.
+		return
+	}
+	if latest.LogIndex() != index {
+		// The latest configuration is yet to be committed.
+		// We will skip this.
+		// The uncommitted joint configuration should always be the last configuration.
+		return
+	}
+	// A joint configuration (and the latest configuration) has been committed.
+	Must1(s.confStore.commitTransition())
 }
 
 func (s *Server) handleRPC(rpc *RPC) {
