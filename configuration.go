@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sumimakito/raft/pb"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -121,11 +122,9 @@ func (c *configuration) Joint() bool {
 	return c.Next != nil
 }
 
-func (c *configuration) Peer(serverId string) *pb.Peer {
-	if p, ok := c.peerMap()[serverId]; ok {
-		return p
-	}
-	return nil
+func (c *configuration) Peer(serverId string) (*pb.Peer, bool) {
+	p, ok := c.peerMap()[serverId]
+	return p, ok
 }
 
 func (c *configuration) Peers() []*pb.Peer {
@@ -156,15 +155,17 @@ func newConfigurationStore(server *Server) (*configurationStore, error) {
 		c.latest.Store(newConfiguration(&conf, log.Meta.Index))
 	}
 
+	server.logger.Infow("latest conf", zap.Reflect("conf", c.Latest()))
+
 	return c, nil
 }
 
-// InitiateTransition creates a configuration for joint consensus that combines
+// initiateTransition creates a configuration for joint consensus that combines
 // current and next configuration, and appends the configuration log.
 // Should not be called when the server is already in a joint consensus.
 // When the leader prepares to change the configuration, this should be the only
 // function to call.
-func (s *configurationStore) InitiateTransition(next *config) error {
+func (s *configurationStore) initiateTransition(next *config) error {
 	latest := s.latest.Load().(*configuration)
 	if latest.Joint() {
 		return ErrInJointConsensus
@@ -184,24 +185,19 @@ func (s *configurationStore) InitiateTransition(next *config) error {
 	return nil
 }
 
-// CommitTransition creates a new configuration from the next configuration in the
+// commitTransition creates a new configuration from the next configuration in the
 // configuration for joint consensus and appends the configuration log.
 // Should not be called when the server is not in a joint consensus.
-func (s *configurationStore) CommitTransition() error {
+// Should only be called by Server.commitAndApply().
+func (s *configurationStore) commitTransition() error {
 	latest := s.latest.Load().(*configuration)
 	if !latest.Joint() {
 		return ErrNotInJointConsensus
 	}
 	c := latest.CopyCommitTransition()
-	appendOp := &logProviderAppendOp{
-		FutureTask: newFutureTask[[]*pb.LogMeta]([]*pb.LogBody{
-			{Type: pb.LogType_CONFIGURATION, Data: Must2(proto.Marshal(c))},
-		}),
-	}
-	s.server.logOpsCh <- appendOp
-	if _, err := appendOp.Result(); err != nil {
-		return err
-	}
+	s.server.appendLogs([]*pb.LogBody{
+		{Type: pb.LogType_CONFIGURATION, Data: Must2(proto.Marshal(c))},
+	})
 	s.server.logger.Infow("a configuration transition has been committed",
 		logFields(s.server, "configuration", c)...)
 	return nil

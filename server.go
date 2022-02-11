@@ -458,7 +458,7 @@ func (s *Server) runLoopCandidate() {
 					voteCancel()
 					s.logger.Infow("won the election", logFields(s)...)
 					s.alterRole(Leader)
-					leaderPeer := s.confStore.Latest().Peer(s.id)
+					leaderPeer, _ := s.confStore.Latest().Peer(s.id)
 					s.alterLeader(leaderPeer)
 					return
 				}
@@ -467,7 +467,7 @@ func (s *Server) runLoopCandidate() {
 					voteCancel()
 					s.logger.Infow("won the election", logFields(s)...)
 					s.alterRole(Leader)
-					leaderPeer := s.confStore.Latest().Peer(s.id)
+					leaderPeer, _ := s.confStore.Latest().Peer(s.id)
 					s.alterLeader(leaderPeer)
 					return
 				}
@@ -722,7 +722,7 @@ func (s *Server) Register(peer *pb.Peer) error {
 	latest := s.confStore.Latest()
 	next := latest.Current.Copy()
 	next.Peers = append(next.Peers, peer)
-	return s.confStore.InitiateTransition(newConfig(next))
+	return s.confStore.initiateTransition(newConfig(next))
 }
 
 func (s *Server) Serve() error {
