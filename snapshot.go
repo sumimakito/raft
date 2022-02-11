@@ -103,6 +103,9 @@ func (s *snapshotScheduler) Stop() {
 type snapshotService struct {
 	server *Server
 
+	startOnce sync.Once
+	stopOnce  sync.Once
+
 	schedulerMu sync.RWMutex
 	scheduler   *snapshotScheduler
 
@@ -120,23 +123,27 @@ func newSnapshotService(server *Server) *snapshotService {
 		stopCh:     make(chan struct{}, 1),
 	}
 
-	go func() {
-		for {
-			select {
-			case <-s.snapshotCh:
-				s.TakeSnapshot()
-			case <-s.stopCh:
-				server.logger.Infow("snapshotService stopped")
-				return
-			}
-		}
-	}()
-
 	return s
 }
 
+func (s *snapshotService) Start() {
+	s.startOnce.Do(func() {
+		go func() {
+			for {
+				select {
+				case <-s.snapshotCh:
+					s.TakeSnapshot()
+				case <-s.stopCh:
+					s.server.logger.Infow("snapshotService stopped")
+					return
+				}
+			}
+		}()
+	})
+}
+
 func (s *snapshotService) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() { close(s.stopCh) })
 }
 
 func (s *snapshotService) Scheduler() *snapshotScheduler {
