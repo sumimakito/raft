@@ -267,7 +267,8 @@ func (s *snapshotService) Restore(snapshotId string) (bool, error) {
 	s.server.setFirstLogIndex(Must2(s.server.logProvider.FirstIndex()))
 	s.server.setLastLogIndex(Must2(s.server.logProvider.LastIndex()))
 
+	s.server.commitAndApply(snapshotMeta.Index())
+
 	s.server.alterConfiguration(newConfiguration(snapshotMeta.Configuration(), snapshotMeta.ConfigurationIndex()))
-	s.server.reselectLoop()
 	return true, nil
 }
