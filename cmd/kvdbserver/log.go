@@ -198,44 +198,42 @@ func (s *LogProvider) Entry(index uint64) (*pb.Log, error) {
 	})
 }
 
-func (s *LogProvider) LastEntry() (*pb.Log, error) {
-	var log *pb.Log
-	return log, s.db.View(func(t *bbolt.Tx) error {
-		bucket := t.Bucket([]byte(logStoreBucketLogs))
-		if bucket == nil {
-			return nil
-		}
-		key, value := bucket.Cursor().Last()
-		if key == nil {
-			return nil
-		}
-		if l, err := decodeLog(value); err != nil {
-			return err
-		} else {
-			log = l
-		}
-		return nil
-	})
-}
-
-func (s *LogProvider) LastTypedEntry(t pb.LogType) (*pb.Log, error) {
+func (s *LogProvider) LastEntry(t pb.LogType) (*pb.Log, error) {
 	var log *pb.Log
 	return log, s.db.View(func(tx *bbolt.Tx) error {
-		var bucket *bbolt.Bucket
-		switch t {
-		case pb.LogType_COMMAND:
-			bucket = tx.Bucket([]byte(logStoreBucketCmdIndexes))
-		case pb.LogType_CONFIGURATION:
-			bucket = tx.Bucket([]byte(logStoreBucketConfIndexes))
+		var lastKey []byte
+		if t != 0 {
+			var bucket *bbolt.Bucket
+			switch t {
+			case pb.LogType_COMMAND:
+				bucket = tx.Bucket([]byte(logStoreBucketCmdIndexes))
+			case pb.LogType_CONFIGURATION:
+				bucket = tx.Bucket([]byte(logStoreBucketConfIndexes))
+			}
+			if bucket == nil {
+				return nil
+			}
+			key, _ := bucket.Cursor().Last()
+			if key == nil {
+				return nil
+			}
+			lastKey = key
 		}
+		bucket := tx.Bucket([]byte(logStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
-		key, value := bucket.Cursor().Last()
-		if key == nil {
-			return nil
+		var lastValue []byte
+		if lastKey != nil {
+			lastValue = bucket.Get(lastKey)
+		} else {
+			key, value := bucket.Cursor().Last()
+			if key == nil {
+				return nil
+			}
+			lastValue = value
 		}
-		if l, err := decodeLog(value); err != nil {
+		if l, err := decodeLog(lastValue); err != nil {
 			return err
 		} else {
 			log = l

@@ -580,7 +580,7 @@ func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.Cancel
 	var lastIndex uint64
 	var lastTerm uint64
 
-	log, err := s.logProvider.LastEntry()
+	log, err := s.logProvider.LastEntry(0)
 	if err != nil {
 		voteCancel()
 		return nil, nil, err

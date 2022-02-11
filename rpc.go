@@ -186,7 +186,7 @@ func (h *rpcHandler) RequestVote(
 		response.Term = h.server.currentTerm()
 	}
 
-	lastLog, err := h.server.logProvider.LastEntry()
+	lastLog, err := h.server.logProvider.LastEntry(0)
 	if err != nil {
 		return nil, err
 	}

@@ -22,9 +22,10 @@ type LogProvider interface {
 	LastIndex() (uint64, error)
 
 	Entry(index uint64) (*pb.Log, error)
-	LastEntry() (*pb.Log, error)
 
-	LastTypedEntry(t pb.LogType) (*pb.Log, error)
+	// LastEntry is used to find the last log entry.
+	// If t is not zero, a log type filter should be applied.
+	LastEntry(t pb.LogType) (*pb.Log, error)
 }
 
 type logProviderOp interface {
