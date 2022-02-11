@@ -59,9 +59,9 @@ func (l *Log) MarshalLogObject(e zapcore.ObjectEncoder) error {
 	return nil
 }
 
-type logArray []*Log
+type LogArray []*Log
 
-func (a logArray) MarshalLogArray(e zapcore.ArrayEncoder) error {
+func (a LogArray) MarshalLogArray(e zapcore.ArrayEncoder) error {
 	for _, l := range a {
 		if err := e.AppendObject(l); err != nil {
 			return err

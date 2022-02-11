@@ -12,9 +12,9 @@ func (p *Peer) MarshalLogObject(e zapcore.ObjectEncoder) error {
 	return nil
 }
 
-type peerArray []*Peer
+type PeerArray []*Peer
 
-func (a peerArray) MarshalLogArray(e zapcore.ArrayEncoder) error {
+func (a PeerArray) MarshalLogArray(e zapcore.ArrayEncoder) error {
 	for _, p := range a {
 		if err := e.AppendObject(p); err != nil {
 			return err

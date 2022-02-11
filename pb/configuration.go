@@ -14,7 +14,7 @@ func (c *Config) MarshalLogObject(e zapcore.ObjectEncoder) error {
 	if c == nil {
 		return nil
 	}
-	if err := e.AddArray("peers", peerArray(c.Peers)); err != nil {
+	if err := e.AddArray("peers", PeerArray(c.Peers)); err != nil {
 		return err
 	}
 	return nil
