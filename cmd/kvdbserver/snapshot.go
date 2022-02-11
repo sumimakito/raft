@@ -14,6 +14,7 @@ import (
 	"github.com/sumimakito/raft"
 	kvdbpb "github.com/sumimakito/raft/cmd/kvdbserver/pb"
 	"github.com/sumimakito/raft/pb"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -113,6 +114,10 @@ func (m *SnapshotMeta) SetCRC64(crc64 uint64) {
 
 func (m *SnapshotMeta) Encode() ([]byte, error) {
 	return proto.Marshal(m.pbMetadata)
+}
+
+func (m *SnapshotMeta) MarshalLogObject(e zapcore.ObjectEncoder) error {
+	return m.pbMetadata.MarshalLogObject(e)
 }
 
 type SnapshotSink struct {
