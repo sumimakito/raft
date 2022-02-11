@@ -14,6 +14,7 @@ func logFields(server *Server, keysAndValues ...interface{}) []interface{} {
 		zap.String("role", server.role().String()),
 		zap.Uint64("term", server.currentTerm()),
 		zap.Uint64("commit_index", server.commitIndex()),
+		zap.Uint64("first_log_index", server.firstLogIndex()),
 		zap.Uint64("last_log_index", server.lastLogIndex()),
 		zap.Uint64("last_applied_index", lastApplied.Index),
 		zap.Uint64("last_applied_term", lastApplied.Term),
