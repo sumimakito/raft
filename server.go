@@ -46,10 +46,6 @@ type serverStepdownChan chan uint64
 type serverChannels struct {
 	noCopy
 
-	confCh chan *configuration
-
-	// appendLogsCh chan FutureTask[[]*pb.LogMeta, []*pb.LogBody]
-
 	// commitCh receives updates on the commit index.
 	commitCh chan uint64
 
@@ -105,7 +101,6 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 		serverState: serverState{stateRole: Follower},
 		commitState: commitState{},
 		serverChannels: serverChannels{
-			confCh:                 make(chan *configuration, 16),
 			commitCh:               make(chan uint64, 16),
 			logOpsCh:               make(chan logProviderOp, 64),
 			logRestoreCh:           make(chan FutureTask[any, SnapshotMeta], 64),
@@ -340,16 +335,6 @@ func (s *Server) shouldReselectLoop() bool {
 	return atomic.LoadUint32(&s.flagReselectLoop) != 0
 }
 
-func (s *Server) runBootstrap(futureTask FutureTask[any, any]) {
-	// c, ok := futureTask.Task().(*Configuration)
-	// if !ok {
-	// 	s.logger.Panicw("received an unknown FutureTask in bootstrap", logFields(s)...)
-	// }
-	// s.logger.Infow("bootstrapped with congifuration", logFields(s, "configuration", c)...)
-	// s.leaderConfCh <- c
-	// futureTask.setResult(c, nil)
-}
-
 func (s *Server) runMainLoop() {
 	for !s.shutdownState() {
 		s.resetReselectLoop()
@@ -380,9 +365,6 @@ func (s *Server) runLoopLeader() {
 		select {
 		case commitIndex := <-s.commitCh:
 			s.commitAndApply(commitIndex)
-		case c := <-s.confCh:
-			s.alterConfiguration(c)
-			s.reselectLoop()
 		case t := <-s.logOpsCh:
 			switch op := t.(type) {
 			case *logProviderAppendOp:
@@ -478,9 +460,6 @@ func (s *Server) runLoopCandidate() {
 			return
 		case commitIndex := <-s.commitCh:
 			s.commitAndApply(commitIndex)
-		case c := <-s.confCh:
-			s.alterConfiguration(c)
-			s.reselectLoop()
 		case t := <-s.logRestoreCh:
 			t.setResult(nil, s.logProvider.Restore(t.Task()))
 		case rpc := <-s.trans.RPC():
@@ -513,9 +492,6 @@ func (s *Server) runLoopFollower() {
 			s.reselectLoop()
 		case commitIndex := <-s.commitCh:
 			s.commitAndApply(commitIndex)
-		case c := <-s.confCh:
-			s.alterConfiguration(c)
-			s.reselectLoop()
 		case t := <-s.logOpsCh:
 			switch op := t.(type) {
 			case *logProviderAppendOp:
@@ -670,20 +646,6 @@ func (s *Server) ApplyCommand(ctx context.Context, command Command) FutureTask[*
 		Data: command,
 	})
 }
-
-// func (s *Server) Bootstrap(c *Configuration) Future[any] {
-// 	if s.shutdownState() {
-// 		return newErrorFuture(ErrServerShutdown)
-// 	}
-// 	task := newFutureTask[any, any](c)
-// 	select {
-// 	case s.bootstrapCh <- task:
-// 		return task
-// 	case err := <-s.shutdownCh:
-// 		s.internalShutdown(err)
-// 		return newErrorFuture(ErrServerShutdown)
-// 	}
-// }
 
 func (s *Server) StateMachine() StateMachine {
 	return s.stateMachine.StateMachine
