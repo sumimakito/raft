@@ -827,10 +827,6 @@ func (s *Server) Shutdown(err error) {
 	s.shutdownCh <- err
 }
 
-func (s *Server) Snapshot() {
-
-}
-
 func (s *Server) States() ServerStates {
 	lastVoteSummary := s.lastVoteSummary()
 	return ServerStates{
