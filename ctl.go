@@ -31,7 +31,7 @@ func (c *asyncCtl) Context() context.Context {
 }
 
 // Release is used to inform that the operation is cancelled/stopped.
-// Should only be called once in one infCtl's lifecycle.
+// Should only be called once in one asyncCtl's lifecycle.
 func (c *asyncCtl) Release() {
 	c.cancel()
 	close(c.waitCh)

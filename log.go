@@ -4,6 +4,9 @@ import (
 	"github.com/sumimakito/raft/pb"
 )
 
+// LogProvider defines the interface for appending, trimming, and retrieving logs.
+// A LogProvider implementation can also implement the optional io.Closer interface
+// to allow releasing the underlying resources it has acquired.
 type LogProvider interface {
 	// AppendLogs is used to append logs to the log store.
 	// It's recommended to use techniques like transaction processing to
