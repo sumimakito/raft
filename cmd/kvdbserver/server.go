@@ -126,7 +126,7 @@ func main() {
 		log.Panic(err)
 	}
 	kvdbAPIExt := NewAPIExtension(logger)
-	logProvider := NewLogProvider(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
+	logProvider := raft.NewBoltLogProvider(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
 	kvsm := NewKVSM()
 	snapshot := NewSnapshotProvider(snapshotDir)
 
