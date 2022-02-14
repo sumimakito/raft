@@ -46,6 +46,14 @@ func (p *internalLogProvider) TrimSuffix(index uint64) error {
 	if i == len(p.logs) {
 		return nil
 	}
+	if p.logs[i].Meta.Index > index {
+		// We did not find the exact entry.
+		if i == 0 {
+			p.logs = []*pb.Log{}
+			return nil
+		}
+		i -= 1
+	}
 	p.logs = append([]*pb.Log(nil), p.logs[:i+1]...)
 	return nil
 }
