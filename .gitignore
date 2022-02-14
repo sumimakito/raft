@@ -6,6 +6,8 @@ pkg/
 # goop - go package manager
 .vendor
 
+.vscode
+
 #############################
 #  $ gibo Go JetBrains OSX  #
 #############################
