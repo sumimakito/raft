@@ -4,9 +4,9 @@ BINDIR = bin
 
 .PHONY: all ci clean dep htmlcov kv pb pbclean test testcov vet
 
-all: dep pb vet testcov kv
+all: dep pb testcov kv
 
-ci: dep pb vet testcov
+ci: dep pb testcov
 
 clean: pbclean
 	$(GO) clean
