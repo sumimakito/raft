@@ -40,7 +40,7 @@ _testmain.go
 *.prof
 
 # Local coverage reports
-__*.cov
+coverage.out
 
 # Local yaml configurations
 __*.yaml
