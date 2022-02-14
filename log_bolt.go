@@ -98,7 +98,6 @@ func (s *BoltLogProvider) TrimPrefix(index uint64) error {
 			return nil
 		}
 		c := bucket.Cursor()
-		c.Seek(EncodeUint64(index))
 		key, value := c.First()
 		for key != nil && DecodeUint64(key) < index {
 			log, err := s.decodeLog(value)
@@ -124,7 +123,6 @@ func (s *BoltLogProvider) TrimSuffix(index uint64) error {
 			return nil
 		}
 		c := bucket.Cursor()
-		c.Seek(EncodeUint64(index))
 		key, value := c.Last()
 		for key != nil && DecodeUint64(key) > index {
 			log, err := s.decodeLog(value)
