@@ -35,17 +35,20 @@ jobs:
         run: |
           PREFIX="https://github.com/protocolbuffers/protobuf/releases/download"
           curl -LO $PREFIX/v${{ env.PROTOC_VERSION }}/${{ env.PROTOC_FILENAME }}
-      
+
       - name: Set up protoc
         run: |
           unzip ${{ env.PROTOC_FILENAME }} -d $HOME/.local
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Set up protobuf
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.26
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.1
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Run test with coverage
         run: |
-          echo $PATH
-          ls -l "$(go env GOPATH)/bin"
           make ci
 
       - name: Upload coverage to Codecov
