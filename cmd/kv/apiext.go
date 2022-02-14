@@ -23,7 +23,7 @@ func NewAPIExtension(logger *zap.Logger) *APIExtension {
 func (e *APIExtension) Setup(s *raft.Server, r *mux.Router) error {
 	r.HandleFunc("/keys", func(rw http.ResponseWriter, r *http.Request) {
 		h := raft.NewHandyRespWriter(rw, e.logger)
-		h.Encoded(s.StateMachine().(*KVSM).Keys(), raft.HandyEncodingJSON, 0)
+		h.Encoded(s.StateMachine().(*StateMachine).Keys(), raft.HandyEncodingJSON, 0)
 	}).Methods("GET")
 
 	r.HandleFunc("/keys/{key}", func(rw http.ResponseWriter, r *http.Request) {
@@ -39,7 +39,7 @@ func (e *APIExtension) Setup(s *raft.Server, r *mux.Router) error {
 			return
 		}
 		vars := mux.Vars(r)
-		v, ok := s.StateMachine().(*KVSM).Value(vars["key"])
+		v, ok := s.StateMachine().(*StateMachine).Value(vars["key"])
 		if !ok {
 			h.WriteHeader(http.StatusNotFound)
 			return
@@ -97,7 +97,7 @@ func (e *APIExtension) Setup(s *raft.Server, r *mux.Router) error {
 
 	r.HandleFunc("/keyvalues", func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
-		snapshot := s.StateMachine().(*KVSM).KeyValues()
+		snapshot := s.StateMachine().(*StateMachine).KeyValues()
 		out, err := json.Marshal(snapshot)
 		if err != nil {
 			log.Println(err)

@@ -7,18 +7,18 @@ import (
 	"github.com/ugorji/go/codec"
 )
 
-type KVSM struct {
+type StateMachine struct {
 	mu     sync.RWMutex
 	index  uint64
 	term   uint64
 	states map[string][]byte
 }
 
-func NewKVSM() *KVSM {
-	return &KVSM{states: map[string][]byte{}}
+func NewStateMachine() *StateMachine {
+	return &StateMachine{states: map[string][]byte{}}
 }
 
-func (m *KVSM) Apply(command raft.Command) {
+func (m *StateMachine) Apply(command raft.Command) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cmd := DecodeCommand(command)
@@ -30,7 +30,7 @@ func (m *KVSM) Apply(command raft.Command) {
 	}
 }
 
-func (m *KVSM) Keys() (keys []string) {
+func (m *StateMachine) Keys() (keys []string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for key := range m.states {
@@ -39,14 +39,14 @@ func (m *KVSM) Keys() (keys []string) {
 	return
 }
 
-func (m *KVSM) Value(key string) ([]byte, bool) {
+func (m *StateMachine) Value(key string) ([]byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	v, ok := m.states[key]
 	return v, ok
 }
 
-func (m *KVSM) KeyValues() map[string][]byte {
+func (m *StateMachine) KeyValues() map[string][]byte {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	keyValues := map[string][]byte{}
@@ -56,7 +56,7 @@ func (m *KVSM) KeyValues() map[string][]byte {
 	return keyValues
 }
 
-func (m *KVSM) Snapshot() (raft.StateMachineSnapshot, error) {
+func (m *StateMachine) Snapshot() (raft.StateMachineSnapshot, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	keyValues := map[string][]byte{}
@@ -66,7 +66,7 @@ func (m *KVSM) Snapshot() (raft.StateMachineSnapshot, error) {
 	return &KVSMSnapshot{index: m.index, term: m.term, keyValues: keyValues}, nil
 }
 
-func (m *KVSM) Restore(snapshot raft.Snapshot) error {
+func (m *StateMachine) Restore(snapshot raft.Snapshot) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	keyValues := map[string][]byte{}

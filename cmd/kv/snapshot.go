@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/sumimakito/raft"
-	kvdbpb "github.com/sumimakito/raft/cmd/kvdbserver/pb"
+	kvpb "github.com/sumimakito/raft/cmd/kv/pb"
 	"github.com/sumimakito/raft/pb"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
@@ -32,7 +32,7 @@ func newSnapshot(snapshotDir string) (*Snapshot, error) {
 	if err := metadataFile.Close(); err != nil {
 		return nil, err
 	}
-	var pbMetadata kvdbpb.SnapshotMeta
+	var pbMetadata kvpb.SnapshotMeta
 	proto.Unmarshal(metadataBytes, &pbMetadata)
 	snapshotFile, err := os.OpenFile(filepath.Join(snapshotDir, "snapshot"), os.O_RDONLY, 0600)
 	if err != nil {
@@ -57,7 +57,7 @@ func (s *Snapshot) Close() error {
 }
 
 type SnapshotMeta struct {
-	pbMetadata *kvdbpb.SnapshotMeta
+	pbMetadata *kvpb.SnapshotMeta
 }
 
 func (m *SnapshotMeta) Id() string {
@@ -276,7 +276,7 @@ func (s *SnapshotProvider) Create(index, term uint64, c *pb.Configuration, cInde
 	}
 
 	sink := newSnapshotSink(wipDir, finalDir, &SnapshotMeta{
-		pbMetadata: &kvdbpb.SnapshotMeta{
+		pbMetadata: &kvpb.SnapshotMeta{
 			Id:                 id,
 			Index:              index,
 			Term:               term,
@@ -301,7 +301,7 @@ func (s *SnapshotProvider) Open(id string) (raft.Snapshot, error) {
 }
 
 func (s *SnapshotProvider) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {
-	var pbMetadata kvdbpb.SnapshotMeta
+	var pbMetadata kvpb.SnapshotMeta
 	proto.Unmarshal(b, &pbMetadata)
 	return &SnapshotMeta{pbMetadata: &pbMetadata}, nil
 }

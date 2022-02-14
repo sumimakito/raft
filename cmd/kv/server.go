@@ -125,23 +125,23 @@ func main() {
 	if err != nil {
 		log.Panic(err)
 	}
-	kvdbAPIExt := NewAPIExtension(logger)
+	apiExtension := NewAPIExtension(logger)
 	logProvider := raft.NewBoltLogProvider(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
-	kvsm := NewKVSM()
-	snapshot := NewSnapshotProvider(snapshotDir)
+	stateMachine := NewStateMachine()
+	snapshotProvider := NewSnapshotProvider(snapshotDir)
 
 	server, err := raft.NewServer(
 		raft.ServerCoreOptions{
 			Id:               serverID,
 			InitialCluster:   cluster,
 			LogProvider:      logProvider,
-			StateMachine:     kvsm,
-			SnapshotProvider: snapshot,
+			StateMachine:     stateMachine,
+			SnapshotProvider: snapshotProvider,
 			Transport:        transport,
 		},
 		raft.ElectionTimeoutOption(1*time.Second),
 		raft.FollowerTimeoutOption(1*time.Second),
-		raft.APIExtensionOption(kvdbAPIExt),
+		raft.APIExtensionOption(apiExtension),
 		raft.APIServerListenAddressOption(apiServerAddr),
 		raft.LogLevelOption(logLevel),
 		raft.StableStorePathOption(filepath.Join(stableDir, fmt.Sprintf("stable_%s.db", serverID))),
