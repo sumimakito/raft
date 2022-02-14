@@ -28,12 +28,13 @@ jobs:
         id: cache-protoc
         with:
           path: ${{ env.PROTOC_FILENAME }}
+          key: ${{ env.PROTOC_FILENAME }}
 
       - name: Download protoc
         if: steps.cache-protoc.outputs.cache-hit != 'true'
         run: |
           PREFIX="https://github.com/protocolbuffers/protobuf/releases/download"
-          curl -L o protoc.zip $PREFIX/v${{ env.PROTOC_VERSION }}/${{ env.PROTOC_FILENAME }}
+          curl -LO $PREFIX/v${{ env.PROTOC_VERSION }}/${{ env.PROTOC_FILENAME }}
       
       - name: Set up protoc
         run: |
