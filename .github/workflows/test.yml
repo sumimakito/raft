@@ -43,7 +43,10 @@ jobs:
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Run test with coverage
-        run: make ci
+        run: |
+          echo $PATH
+          ls -l "$(go env GOPATH)/bin"
+          make ci
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v2
