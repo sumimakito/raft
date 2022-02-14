@@ -9,15 +9,40 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      PROTOC_VERSION: 3.19.4
     steps:
       - uses: actions/checkout@v2
+
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
           stable: 'false'
           go-version: 1.18.0-beta2
+
+      - name: Prepare protoc
+        run: |
+          echo "PROTOC_FILENAME=protoc-${{ env.PROTOC_VERSION }}-$(uname -s | tr [:upper:] [:lower:])-$(uname -m).zip" >> $GITHUB_ENV
+
+      - uses: actions/cache@v2
+        id: cache-protoc
+        with:
+          path: ${{ env.PROTOC_FILENAME }}
+
+      - name: Download protoc
+        if: steps.cache-protoc.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="https://github.com/protocolbuffers/protobuf/releases/download"
+          curl -L o protoc.zip $PREFIX/v${{ env.PROTOC_VERSION }}/${{ env.PROTOC_FILENAME }}
+      
+      - name: Set up protoc
+        run: |
+          unzip ${{ env.PROTOC_FILENAME }} -d $HOME/.local
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Run test with coverage
         run: make ci
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v2
         with:
