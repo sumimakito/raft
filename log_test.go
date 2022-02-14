@@ -102,7 +102,7 @@ func testLogProviderTrim(t *testing.T, p LogProvider) {
 	assert.Equal(t, log3.Meta.Index, i)
 
 	// Trim the last entry
-	err = p.TrimSuffix(3)
+	err = p.TrimSuffix(6)
 	assert.NoError(t, err)
 	i, err = p.LastIndex()
 	assert.NoError(t, err)
@@ -111,9 +111,9 @@ func testLogProviderTrim(t *testing.T, p LogProvider) {
 
 func testLogProviderEntry(t *testing.T, p LogProvider) {
 	log1 := testingNewPbLog(1, 1, pb.LogType_COMMAND)
-	log2 := testingNewPbLog(3, 1, pb.LogType_COMMAND)
-	log3 := testingNewPbLog(5, 1, pb.LogType_CONFIGURATION)
-	log4 := testingNewPbLog(7, 1, pb.LogType_COMMAND)
+	log3 := testingNewPbLog(3, 1, pb.LogType_COMMAND)
+	log5 := testingNewPbLog(5, 1, pb.LogType_CONFIGURATION)
+	log7 := testingNewPbLog(7, 1, pb.LogType_COMMAND)
 
 	e, err := p.Entry(1)
 	assert.NoError(t, err)
@@ -123,40 +123,40 @@ func testLogProviderEntry(t *testing.T, p LogProvider) {
 	assert.NoError(t, err)
 	assert.Nil(t, e)
 
-	p.AppendLogs([]*pb.Log{log1, log2, log3, log4})
+	p.AppendLogs([]*pb.Log{log1, log3, log5, log7})
 
 	e, err = p.Entry(log1.Meta.Index)
 	assert.NoError(t, err)
 	assert.NotNil(t, e)
 	assert.Equal(t, log1.Meta.Index, e.Meta.Index)
 
-	e, err = p.Entry(log2.Meta.Index)
+	e, err = p.Entry(log3.Meta.Index)
 	assert.NoError(t, err)
 	assert.NotNil(t, e)
-	assert.Equal(t, log2.Meta.Index, e.Meta.Index)
+	assert.Equal(t, log3.Meta.Index, e.Meta.Index)
 
 	e, err = p.Entry(0)
 	assert.NoError(t, err)
 	assert.Nil(t, e)
 
-	e, err = p.Entry(5)
+	e, err = p.Entry(9)
 	assert.NoError(t, err)
 	assert.Nil(t, e)
 
 	e, err = p.LastEntry(0)
 	assert.NoError(t, err)
 	assert.NotNil(t, e)
-	assert.Equal(t, log4.Meta.Index, e.Meta.Index)
+	assert.Equal(t, log7.Meta.Index, e.Meta.Index)
 
 	e, err = p.LastEntry(pb.LogType_COMMAND)
 	assert.NoError(t, err)
 	assert.NotNil(t, e)
-	assert.Equal(t, log4.Meta.Index, e.Meta.Index)
+	assert.Equal(t, log7.Meta.Index, e.Meta.Index)
 
 	e, err = p.LastEntry(pb.LogType_CONFIGURATION)
 	assert.NoError(t, err)
 	assert.NotNil(t, e)
-	assert.Equal(t, log3.Meta.Index, e.Meta.Index)
+	assert.Equal(t, log5.Meta.Index, e.Meta.Index)
 
 	// Type that does not exist
 	e, err = p.LastEntry(255)
