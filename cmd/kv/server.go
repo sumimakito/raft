@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/sumimakito/raft"
-	"github.com/sumimakito/raft/grpctrans"
 	"github.com/sumimakito/raft/pb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -130,7 +129,7 @@ func main() {
 		log.Panic(err)
 	}
 
-	transport, err := grpctrans.NewTransport(rpcServerAddr)
+	transport, err := raft.NewGRPCTransport(rpcServerAddr)
 	if err != nil {
 		log.Panic(err)
 	}

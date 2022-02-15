@@ -1,4 +1,4 @@
-package grpctrans
+package raft
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/sumimakito/raft"
 	"github.com/sumimakito/raft/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -19,13 +18,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type grpcService struct {
-	rpcCh chan *raft.RPC
+type grpcTransService struct {
+	rpcCh chan *RPC
 	pb.UnimplementedTransportServer
 }
 
-func (s *grpcService) AppendEntries(ctx context.Context, request *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error) {
-	r := raft.NewRPC(ctx, request)
+func (s *grpcTransService) AppendEntries(ctx context.Context, request *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error) {
+	r := NewRPC(ctx, request)
 	s.rpcCh <- r
 	response, err := r.Response()
 	if err != nil {
@@ -34,8 +33,8 @@ func (s *grpcService) AppendEntries(ctx context.Context, request *pb.AppendEntri
 	return response.(*pb.AppendEntriesResponse), nil
 }
 
-func (s *grpcService) RequestVote(ctx context.Context, request *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error) {
-	r := raft.NewRPC(ctx, request)
+func (s *grpcTransService) RequestVote(ctx context.Context, request *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error) {
+	r := NewRPC(ctx, request)
 	s.rpcCh <- r
 	response, err := r.Response()
 	if err != nil {
@@ -44,7 +43,7 @@ func (s *grpcService) RequestVote(ctx context.Context, request *pb.RequestVoteRe
 	return response.(*pb.RequestVoteResponse), nil
 }
 
-func (s *grpcService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer) error {
+func (s *grpcTransService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer) error {
 	streamMetadata, ok := metadata.FromIncomingContext(stream.Context())
 	if !ok {
 		return errors.New("invalid metadata")
@@ -65,14 +64,14 @@ func (s *grpcService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer)
 	}
 
 	pr, pw := io.Pipe()
-	writer := raft.NewBufferedWriteCloser(pw)
+	writer := NewBufferedWriteCloser(pw)
 
-	request := &raft.InstallSnapshotRequest{
+	request := &InstallSnapshotRequest{
 		Metadata: &requestMeta,
-		Reader:   raft.NewBufferedReadCloser(pr),
+		Reader:   NewBufferedReadCloser(pr),
 	}
 
-	r := raft.NewRPC(stream.Context(), request)
+	r := NewRPC(stream.Context(), request)
 	s.rpcCh <- r
 
 	go func() {
@@ -101,8 +100,8 @@ func (s *grpcService) InstallSnapshot(stream pb.Transport_InstallSnapshotServer)
 	return stream.SendAndClose(response.(*pb.InstallSnapshotResponse))
 }
 
-func (s *grpcService) ApplyLog(ctx context.Context, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {
-	r := raft.NewRPC(ctx, request)
+func (s *grpcTransService) ApplyLog(ctx context.Context, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error) {
+	r := NewRPC(ctx, request)
 	s.rpcCh <- r
 	response, err := r.Response()
 	if err != nil {
@@ -111,36 +110,36 @@ func (s *grpcService) ApplyLog(ctx context.Context, request *pb.ApplyLogRequest)
 	return response.(*pb.ApplyLogResponse), nil
 }
 
-type rpcClient struct {
+type grpcTransClient struct {
 	conn   *grpc.ClientConn
 	client pb.TransportClient
 }
 
-type Transport struct {
-	service *grpcService
+type GRPCTransport struct {
+	service *grpcTransService
 	server  *grpc.Server
 
 	listener net.Listener
 
 	serveFlag uint32
 
-	clients   map[string]*rpcClient
+	clients   map[string]*grpcTransClient
 	clientsMu sync.RWMutex // protects clients
 }
 
-func NewTransport(listenAddr string) (*Transport, error) {
+func NewGRPCTransport(listenAddr string) (*GRPCTransport, error) {
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return nil, err
 	}
-	return &Transport{
-		service:  &grpcService{rpcCh: make(chan *raft.RPC, 16)},
+	return &GRPCTransport{
+		service:  &grpcTransService{rpcCh: make(chan *RPC, 16)},
 		listener: listener,
-		clients:  map[string]*rpcClient{},
+		clients:  map[string]*grpcTransClient{},
 	}, nil
 }
 
-func (t *Transport) connectLocked(peer *pb.Peer) error {
+func (t *GRPCTransport) connectLocked(peer *pb.Peer) error {
 	if _, ok := t.clients[peer.Id]; ok {
 		return nil
 	}
@@ -149,21 +148,21 @@ func (t *Transport) connectLocked(peer *pb.Peer) error {
 		return err
 	}
 	log.Println("peer connected", "target", conn.Target())
-	t.clients[peer.Id] = &rpcClient{conn: conn, client: pb.NewTransportClient(conn)}
+	t.clients[peer.Id] = &grpcTransClient{conn: conn, client: pb.NewTransportClient(conn)}
 	return nil
 }
 
-func (t *Transport) disconnectLocked(peer *pb.Peer) {
+func (t *GRPCTransport) disconnectLocked(peer *pb.Peer) {
 	if client, ok := t.clients[peer.Id]; ok {
 		delete(t.clients, peer.Id)
 		client.conn.Close()
 	}
 }
 
-func (t *Transport) tryClient(peer *pb.Peer, fn func(c *rpcClient) error) error {
+func (t *GRPCTransport) tryClient(peer *pb.Peer, fn func(c *grpcTransClient) error) error {
 	retryState := -1
 	var lastErr error
-	var client *rpcClient
+	var client *grpcTransClient
 	var ok bool
 retryClient:
 	if retryState > 0 {
@@ -213,15 +212,15 @@ tryCall:
 	return nil
 }
 
-func (t *Transport) Endpoint() string {
+func (t *GRPCTransport) Endpoint() string {
 	return t.listener.Addr().String()
 }
 
-func (t *Transport) AppendEntries(
+func (t *GRPCTransport) AppendEntries(
 	ctx context.Context, peer *pb.Peer, request *pb.AppendEntriesRequest,
 ) (*pb.AppendEntriesResponse, error) {
 	var response *pb.AppendEntriesResponse
-	if err := t.tryClient(peer, func(c *rpcClient) error {
+	if err := t.tryClient(peer, func(c *grpcTransClient) error {
 		r, err := c.client.AppendEntries(ctx, request)
 		if err != nil {
 			return err
@@ -234,11 +233,11 @@ func (t *Transport) AppendEntries(
 	return response, nil
 }
 
-func (t *Transport) RequestVote(
+func (t *GRPCTransport) RequestVote(
 	ctx context.Context, peer *pb.Peer, request *pb.RequestVoteRequest,
 ) (*pb.RequestVoteResponse, error) {
 	var response *pb.RequestVoteResponse
-	if err := t.tryClient(peer, func(c *rpcClient) error {
+	if err := t.tryClient(peer, func(c *grpcTransClient) error {
 		r, err := c.client.RequestVote(ctx, request)
 		if err != nil {
 			return err
@@ -251,11 +250,11 @@ func (t *Transport) RequestVote(
 	return response, nil
 }
 
-func (t *Transport) InstallSnapshot(
+func (t *GRPCTransport) InstallSnapshot(
 	ctx context.Context, peer *pb.Peer, requestMeta *pb.InstallSnapshotRequestMeta, reader io.Reader,
 ) (*pb.InstallSnapshotResponse, error) {
 	var response *pb.InstallSnapshotResponse
-	if err := t.tryClient(peer, func(c *rpcClient) error {
+	if err := t.tryClient(peer, func(c *grpcTransClient) error {
 		reqestMetaByets, err := proto.Marshal(requestMeta)
 		if err != nil {
 			return err
@@ -290,11 +289,11 @@ func (t *Transport) InstallSnapshot(
 	return response, nil
 }
 
-func (t *Transport) ApplyLog(
+func (t *GRPCTransport) ApplyLog(
 	ctx context.Context, peer *pb.Peer, request *pb.ApplyLogRequest,
 ) (*pb.ApplyLogResponse, error) {
 	var response *pb.ApplyLogResponse
-	if err := t.tryClient(peer, func(c *rpcClient) error {
+	if err := t.tryClient(peer, func(c *grpcTransClient) error {
 		r, err := c.client.ApplyLog(ctx, request)
 		if err != nil {
 			return err
@@ -307,11 +306,11 @@ func (t *Transport) ApplyLog(
 	return response, nil
 }
 
-func (t *Transport) RPC() <-chan *raft.RPC {
+func (t *GRPCTransport) RPC() <-chan *RPC {
 	return t.service.rpcCh
 }
 
-func (t *Transport) Serve() error {
+func (t *GRPCTransport) Serve() error {
 	if !atomic.CompareAndSwapUint32(&t.serveFlag, 0, 1) {
 		panic("Serve() should be only called once")
 	}
@@ -321,7 +320,7 @@ func (t *Transport) Serve() error {
 	return t.server.Serve(t.listener)
 }
 
-func (t *Transport) Connect(peer *pb.Peer) error {
+func (t *GRPCTransport) Connect(peer *pb.Peer) error {
 	t.clientsMu.RLock()
 	if _, ok := t.clients[peer.Id]; ok {
 		return nil
@@ -332,7 +331,7 @@ func (t *Transport) Connect(peer *pb.Peer) error {
 	return t.connectLocked(peer)
 }
 
-func (t *Transport) Disconnect(peer *pb.Peer) {
+func (t *GRPCTransport) Disconnect(peer *pb.Peer) {
 	t.clientsMu.Lock()
 	defer t.clientsMu.Unlock()
 	if client, ok := t.clients[peer.Id]; ok {
@@ -341,16 +340,16 @@ func (t *Transport) Disconnect(peer *pb.Peer) {
 	}
 }
 
-func (t *Transport) DisconnectAll() {
+func (t *GRPCTransport) DisconnectAll() {
 	t.clientsMu.Lock()
 	defer t.clientsMu.Unlock()
 	for _, client := range t.clients {
 		client.conn.Close()
 	}
-	t.clients = map[string]*rpcClient{}
+	t.clients = map[string]*grpcTransClient{}
 }
 
-func (t *Transport) Close() error {
+func (t *GRPCTransport) Close() error {
 	t.DisconnectAll()
 	t.server.GracefulStop()
 	return nil
