@@ -13,7 +13,7 @@ clean: pbclean
 	rm -f $(BINDIR)/kv
 
 dep:
-	$(GO) mod download
+	$(GO) mod download -x
 
 htmlcov: testcov
 	$(GO) tool cover -html=coverage.out
