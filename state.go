@@ -137,3 +137,12 @@ func (state *commitState) lastApplied() lastAppliedTuple {
 func (state *commitState) setLastApplied(index, term uint64) {
 	state.aLastApplied.Store(lastAppliedTuple{Index: index, Term: term})
 }
+
+// StateStore defines the interface to save and restore the persistent
+// server states from a stable store.
+type StateStore interface {
+	CurrentTerm() (uint64, error)
+	SetCurrentTerm(term uint64) error
+	LastVote() (voteSummary, error)
+	SetLastVote(summary voteSummary) error
+}
