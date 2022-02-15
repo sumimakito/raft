@@ -9,21 +9,21 @@ import (
 )
 
 const (
-	boltLogProviderBucketLogs        = "logs"
-	boltLogProviderBucketCmdIndexes  = "cmd_indexes"
-	boltLogProviderBucketConfIndexes = "conf_indexes"
+	boltLogStoreBucketLogs        = "logs"
+	boltLogStoreBucketCmdIndexes  = "cmd_indexes"
+	boltLogStoreBucketConfIndexes = "conf_indexes"
 )
 
-// BoltLogProvider is a log provider that uses bbolt as a backend.
-type BoltLogProvider struct {
+// BoltLogStore is a LogStore that uses bbolt as a backend.
+type BoltLogStore struct {
 	db *bbolt.DB
 }
 
-func NewBoltLogProvider(path string) *BoltLogProvider {
-	return &BoltLogProvider{db: Must2(bbolt.Open(path, 0600, nil))}
+func NewBoltLogStore(db *bbolt.DB) *BoltLogStore {
+	return &BoltLogStore{db: db}
 }
 
-func (s *BoltLogProvider) encodeLog(log *pb.Log) ([]byte, error) {
+func (s *BoltLogStore) encodeLog(log *pb.Log) ([]byte, error) {
 	b, err := proto.Marshal(log)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func (s *BoltLogProvider) encodeLog(log *pb.Log) ([]byte, error) {
 	return b, nil
 }
 
-func (s *BoltLogProvider) decodeLog(in []byte) (*pb.Log, error) {
+func (s *BoltLogStore) decodeLog(in []byte) (*pb.Log, error) {
 	var pbLog pb.Log
 	if err := proto.Unmarshal(in, &pbLog); err != nil {
 		return nil, err
@@ -39,14 +39,14 @@ func (s *BoltLogProvider) decodeLog(in []byte) (*pb.Log, error) {
 	return &pbLog, nil
 }
 
-func (s *BoltLogProvider) putLogIndex(tx *bbolt.Tx, t pb.LogType, index uint64) error {
+func (s *BoltLogStore) putLogIndex(tx *bbolt.Tx, t pb.LogType, index uint64) error {
 	var bucket *bbolt.Bucket
 	var err error
 	switch t {
 	case pb.LogType_COMMAND:
-		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogProviderBucketCmdIndexes))
+		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogStoreBucketCmdIndexes))
 	case pb.LogType_CONFIGURATION:
-		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogProviderBucketConfIndexes))
+		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogStoreBucketConfIndexes))
 	}
 	if err != nil {
 		return err
@@ -54,14 +54,14 @@ func (s *BoltLogProvider) putLogIndex(tx *bbolt.Tx, t pb.LogType, index uint64) 
 	return bucket.Put(EncodeUint64(index), nil)
 }
 
-func (s *BoltLogProvider) deleteLogIndex(tx *bbolt.Tx, t pb.LogType, index uint64) error {
+func (s *BoltLogStore) deleteLogIndex(tx *bbolt.Tx, t pb.LogType, index uint64) error {
 	var bucket *bbolt.Bucket
 	var err error
 	switch t {
 	case pb.LogType_COMMAND:
-		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogProviderBucketCmdIndexes))
+		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogStoreBucketCmdIndexes))
 	case pb.LogType_CONFIGURATION:
-		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogProviderBucketCmdIndexes))
+		bucket, err = tx.CreateBucketIfNotExists([]byte(boltLogStoreBucketCmdIndexes))
 	}
 	if err != nil {
 		return err
@@ -69,9 +69,9 @@ func (s *BoltLogProvider) deleteLogIndex(tx *bbolt.Tx, t pb.LogType, index uint6
 	return bucket.Delete(EncodeUint64(index))
 }
 
-func (s *BoltLogProvider) AppendLogs(logs []*pb.Log) error {
+func (s *BoltLogStore) AppendLogs(logs []*pb.Log) error {
 	return s.db.Update(func(t *bbolt.Tx) error {
-		bucket, err := t.CreateBucketIfNotExists([]byte(boltLogProviderBucketLogs))
+		bucket, err := t.CreateBucketIfNotExists([]byte(boltLogStoreBucketLogs))
 		if err != nil {
 			return err
 		}
@@ -91,9 +91,9 @@ func (s *BoltLogProvider) AppendLogs(logs []*pb.Log) error {
 	})
 }
 
-func (s *BoltLogProvider) TrimPrefix(index uint64) error {
+func (s *BoltLogStore) TrimPrefix(index uint64) error {
 	return s.db.Update(func(t *bbolt.Tx) error {
-		bucket := t.Bucket([]byte(boltLogProviderBucketLogs))
+		bucket := t.Bucket([]byte(boltLogStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
@@ -116,9 +116,9 @@ func (s *BoltLogProvider) TrimPrefix(index uint64) error {
 	})
 }
 
-func (s *BoltLogProvider) TrimSuffix(index uint64) error {
+func (s *BoltLogStore) TrimSuffix(index uint64) error {
 	return s.db.Update(func(t *bbolt.Tx) error {
-		bucket := t.Bucket([]byte(boltLogProviderBucketLogs))
+		bucket := t.Bucket([]byte(boltLogStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
@@ -141,10 +141,10 @@ func (s *BoltLogProvider) TrimSuffix(index uint64) error {
 	})
 }
 
-func (s *BoltLogProvider) FirstIndex() (uint64, error) {
+func (s *BoltLogStore) FirstIndex() (uint64, error) {
 	var index uint64
 	return index, s.db.View(func(t *bbolt.Tx) error {
-		bucket := t.Bucket([]byte(boltLogProviderBucketLogs))
+		bucket := t.Bucket([]byte(boltLogStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
@@ -158,10 +158,10 @@ func (s *BoltLogProvider) FirstIndex() (uint64, error) {
 	})
 }
 
-func (s *BoltLogProvider) LastIndex() (uint64, error) {
+func (s *BoltLogStore) LastIndex() (uint64, error) {
 	var index uint64
 	return index, s.db.View(func(t *bbolt.Tx) error {
-		bucket := t.Bucket([]byte(boltLogProviderBucketLogs))
+		bucket := t.Bucket([]byte(boltLogStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
@@ -175,10 +175,10 @@ func (s *BoltLogProvider) LastIndex() (uint64, error) {
 	})
 }
 
-func (s *BoltLogProvider) Entry(index uint64) (*pb.Log, error) {
+func (s *BoltLogStore) Entry(index uint64) (*pb.Log, error) {
 	var log *pb.Log
 	return log, s.db.View(func(t *bbolt.Tx) error {
-		bucket := t.Bucket([]byte(boltLogProviderBucketLogs))
+		bucket := t.Bucket([]byte(boltLogStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
@@ -195,7 +195,7 @@ func (s *BoltLogProvider) Entry(index uint64) (*pb.Log, error) {
 	})
 }
 
-func (s *BoltLogProvider) LastEntry(t pb.LogType) (*pb.Log, error) {
+func (s *BoltLogStore) LastEntry(t pb.LogType) (*pb.Log, error) {
 	var log *pb.Log
 	return log, s.db.View(func(tx *bbolt.Tx) error {
 		var lastKey []byte
@@ -203,9 +203,9 @@ func (s *BoltLogProvider) LastEntry(t pb.LogType) (*pb.Log, error) {
 			var bucket *bbolt.Bucket
 			switch t {
 			case pb.LogType_COMMAND:
-				bucket = tx.Bucket([]byte(boltLogProviderBucketCmdIndexes))
+				bucket = tx.Bucket([]byte(boltLogStoreBucketCmdIndexes))
 			case pb.LogType_CONFIGURATION:
-				bucket = tx.Bucket([]byte(boltLogProviderBucketConfIndexes))
+				bucket = tx.Bucket([]byte(boltLogStoreBucketConfIndexes))
 			default:
 				return nil
 			}
@@ -218,7 +218,7 @@ func (s *BoltLogProvider) LastEntry(t pb.LogType) (*pb.Log, error) {
 			}
 			lastKey = key
 		}
-		bucket := tx.Bucket([]byte(boltLogProviderBucketLogs))
+		bucket := tx.Bucket([]byte(boltLogStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
@@ -241,9 +241,9 @@ func (s *BoltLogProvider) LastEntry(t pb.LogType) (*pb.Log, error) {
 	})
 }
 
-func (s *BoltLogProvider) DebugPrint() {
+func (s *BoltLogStore) DebugPrint() {
 	if err := s.db.View(func(t *bbolt.Tx) error {
-		bucket := t.Bucket([]byte(boltLogProviderBucketLogs))
+		bucket := t.Bucket([]byte(boltLogStoreBucketLogs))
 		if bucket == nil {
 			return nil
 		}
@@ -264,6 +264,6 @@ func (s *BoltLogProvider) DebugPrint() {
 	}
 }
 
-func (p *BoltLogProvider) Close() error {
+func (p *BoltLogStore) Close() error {
 	return p.db.Close()
 }

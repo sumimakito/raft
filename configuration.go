@@ -143,7 +143,7 @@ func newConfigurationStore(server *Server) (*configurationStore, error) {
 	c.latest.Store(nilConfiguration)
 
 	// Find the latest configuration
-	log, err := server.logProvider.LastEntry(pb.LogType_CONFIGURATION)
+	log, err := server.logStore.LastEntry(pb.LogType_CONFIGURATION)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func (s *configurationStore) initiateTransition(next *config) error {
 		return ErrInJointConsensus
 	}
 	c := latest.CopyInitiateTransition(next.Config)
-	appendOp := &logProviderAppendOp{
+	appendOp := &logStoreAppendOp{
 		FutureTask: newFutureTask[[]*pb.LogMeta]([]*pb.LogBody{
 			{Type: pb.LogType_CONFIGURATION, Data: Must2(proto.Marshal(c))},
 		}),

@@ -50,7 +50,7 @@ type serverChannels struct {
 	// commitCh receives updates on the commit index.
 	commitCh chan uint64
 
-	logOpsCh     chan logProviderOp
+	logOpsCh     chan logStoreOp
 	logRestoreCh chan FutureTask[any, SnapshotMeta]
 
 	rpcCh chan *RPC
@@ -87,9 +87,9 @@ type Server struct {
 
 	apiServer *apiServer
 
-	logProvider      *logProviderProxy
-	snapshotProvider SnapshotProvider
-	trans            Transport
+	logStore      *logStoreProxy
+	snapshotStore SnapshatStore
+	trans         Transport
 
 	// flagReselectLoop is a flag used by current loop to exit and re-select a loop to enter.
 	flagReselectLoop uint32
@@ -113,7 +113,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 		commitState:    commitState{},
 		serverChannels: serverChannels{
 			commitCh:               make(chan uint64, 16),
-			logOpsCh:               make(chan logProviderOp, 64),
+			logOpsCh:               make(chan logStoreOp, 64),
 			logRestoreCh:           make(chan FutureTask[any, SnapshotMeta], 64),
 			rpcCh:                  make(chan *RPC, 16),
 			serveErrCh:             make(chan error, 8),
@@ -129,15 +129,14 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 	// Set up the logger
 	server.logger = serverLogger(server.opts.logLevel)
 
-	// Set up the log provider
-	server.logProvider = newLogProviderProxy(server, coreOpts.LogProvider)
-	server.stable = newStableStore(server)
+	// Set up the LogStore
+	server.logStore = newLogStoreProxy(server, server.stableStore)
 	if err := server.restoreStates(); err != nil {
 		return nil, err
 	}
 
 	server.apiServer = newAPIServer(server, server.opts.apiExtensions...)
-	// Recover the configuration store using the log provider.
+	// Recover the configurationStore using the LogStore.
 	if confStore, err := newConfigurationStore(server); err != nil {
 		return nil, err
 	} else {
@@ -149,7 +148,7 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 	server.stateMachine = newStateMachineProxy(server, coreOpts.StateMachine)
 
 	// Restore using the latest snapshot (if any).
-	snapshotMetaList, err := server.snapshotProvider.List()
+	snapshotMetaList, err := server.snapshotStore.List()
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +242,7 @@ func (s *Server) stepdownFollower(leader *pb.Peer) {
 	s.setRole(Follower)
 }
 
-// appendLogs submits the logs to the log store and updates the index states.
+// appendLogs submits the logs to the LogStore and updates the index states.
 // NOT safe for concurrent use.
 // Should be used by non-leader servers.
 func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
@@ -279,14 +278,14 @@ func (s *Server) appendLogs(bodies []*pb.LogBody) ([]*pb.LogMeta, error) {
 		conf = newConfiguration(&pbConfiguration, log.Meta.Index)
 	}
 
-	if err := s.logProvider.AppendLogs(logs); err != nil {
+	if err := s.logStore.AppendLogs(logs); err != nil {
 		return nil, err
 	}
 
 	// Logs have been appended now.
 	// Failure to update the index will cause a panic.
-	s.setFirstLogIndex(Must2(s.logProvider.FirstIndex()))
-	s.setLastLogIndex(Must2(s.logProvider.LastIndex()))
+	s.setFirstLogIndex(Must2(s.logStore.FirstIndex()))
+	s.setLastLogIndex(Must2(s.logStore.LastIndex()))
 
 	// Special process is necessary if configuration logs are discovered.
 	if conf != nil {
@@ -321,12 +320,12 @@ func (s *Server) commitAndApply(commitIndex uint64) {
 	var commitTerm uint64
 	var lastConfigurationLog *pb.Log
 	for i := firstIndex; i <= commitIndex; i++ {
-		if s.logProvider.withinSnapshot(i) {
+		if s.logStore.withinSnapshot(i) {
 			// Skip the log entry if its index is compacted by the snapshot.
-			commitTerm = s.logProvider.snapshotMeta.Term()
+			commitTerm = s.logStore.snapshotMeta.Term()
 			continue
 		}
-		log := Must2(s.logProvider.Entry(i))
+		log := Must2(s.logStore.Entry(i))
 		if log == nil {
 			// We've found one or more gaps in the logs
 			s.logger.Panicw("one or more log gaps are detected", logFields(s, "missing_index", i)...)
@@ -467,22 +466,22 @@ func (s *Server) runLoopLeader() {
 			s.commitAndApply(commitIndex)
 		case t := <-s.logOpsCh:
 			switch op := t.(type) {
-			case *logProviderAppendOp:
+			case *logStoreAppendOp:
 				op.setResult(s.appendLogs(op.Task()))
-			case *logProviderTrimOp:
+			case *logStoreTrimOp:
 				switch op.Type {
-				case logProviderTrimPrefix:
-					op.setResult(nil, s.logProvider.TrimPrefix(op.Task()))
-				case logProviderTrimSuffix:
-					op.setResult(nil, s.logProvider.TrimSuffix(op.Task()))
+				case logStoreTrimPrefix:
+					op.setResult(nil, s.logStore.TrimPrefix(op.Task()))
+				case logStoreTrimSuffix:
+					op.setResult(nil, s.logStore.TrimSuffix(op.Task()))
 				default:
-					s.logger.Warnw("unknown type in logProviderTrimOp", logFields(s)...)
+					s.logger.Warnw("unknown type in logStoreTrimOp", logFields(s)...)
 				}
 			default:
-				s.logger.Warnw("unknown logProviderOp", logFields(s)...)
+				s.logger.Warnw("unknown logStoreOp", logFields(s)...)
 			}
 		case t := <-s.logRestoreCh:
-			t.setResult(nil, s.logProvider.Restore(t.Task()))
+			t.setResult(nil, s.logStore.Restore(t.Task()))
 		case rpc := <-s.trans.RPC():
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
@@ -572,7 +571,7 @@ func (s *Server) runLoopCandidate() {
 		case commitIndex := <-s.commitCh:
 			s.commitAndApply(commitIndex)
 		case t := <-s.logRestoreCh:
-			t.setResult(nil, s.logProvider.Restore(t.Task()))
+			t.setResult(nil, s.logStore.Restore(t.Task()))
 		case rpc := <-s.trans.RPC():
 			go s.handleRPC(rpc)
 		case err := <-s.shutdownCh:
@@ -605,22 +604,22 @@ func (s *Server) runLoopFollower() {
 			s.commitAndApply(commitIndex)
 		case t := <-s.logOpsCh:
 			switch op := t.(type) {
-			case *logProviderAppendOp:
+			case *logStoreAppendOp:
 				op.setResult(s.appendLogs(op.Task()))
-			case *logProviderTrimOp:
+			case *logStoreTrimOp:
 				switch op.Type {
-				case logProviderTrimPrefix:
-					op.setResult(nil, s.logProvider.TrimPrefix(op.Task()))
-				case logProviderTrimSuffix:
-					op.setResult(nil, s.logProvider.TrimSuffix(op.Task()))
+				case logStoreTrimPrefix:
+					op.setResult(nil, s.logStore.TrimPrefix(op.Task()))
+				case logStoreTrimSuffix:
+					op.setResult(nil, s.logStore.TrimSuffix(op.Task()))
 				default:
-					s.logger.Warnw("unknown type in logProviderTrimOp", logFields(s)...)
+					s.logger.Warnw("unknown type in logStoreTrimOp", logFields(s)...)
 				}
 			default:
-				s.logger.Warnw("unknown log operation", logFields(s)...)
+				s.logger.Warnw("unknown logStoreOp", logFields(s)...)
 			}
 		case t := <-s.logRestoreCh:
-			t.setResult(nil, s.logProvider.Restore(t.Task()))
+			t.setResult(nil, s.logStore.Restore(t.Task()))
 		case rpc := <-s.trans.RPC():
 			followerTimer.Reset(s.opts.followerTimeout)
 			go s.handleRPC(rpc)
@@ -667,7 +666,7 @@ func (s *Server) startElection() (<-chan *pb.RequestVoteResponse, context.Cancel
 	var lastIndex uint64
 	var lastTerm uint64
 
-	log, err := s.logProvider.LastEntry(0)
+	log, err := s.logStore.LastEntry(0)
 	if err != nil {
 		voteCancel()
 		return nil, nil, err
@@ -716,7 +715,7 @@ func (s *Server) Apply(ctx context.Context, body *pb.LogBody) FutureTask[*pb.Log
 	if s.role() == Leader {
 		// Leader path
 		internalTask := newFutureTask[[]*pb.LogMeta]([]*pb.LogBody{body.Copy()})
-		appendOp := &logProviderAppendOp{FutureTask: internalTask}
+		appendOp := &logStoreAppendOp{FutureTask: internalTask}
 		select {
 		case s.logOpsCh <- appendOp:
 		case <-ctx.Done():

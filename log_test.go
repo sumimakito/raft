@@ -16,7 +16,7 @@ func testingNewPbLog(index, term uint64, t pb.LogType) *pb.Log {
 	return &pb.Log{Meta: &pb.LogMeta{Index: index, Term: term}, Body: &pb.LogBody{Type: t}}
 }
 
-func testLogProviderAppendLogs(t *testing.T, p LogProvider) {
+func testLogStoreAppendLogs(t *testing.T, p LogStore) {
 	log1 := testingNewPbLog(1, 1, pb.LogType_COMMAND)
 	log2 := testingNewPbLog(2, 1, pb.LogType_COMMAND)
 	log3 := testingNewPbLog(3, 1, pb.LogType_CONFIGURATION)
@@ -51,7 +51,7 @@ func testLogProviderAppendLogs(t *testing.T, p LogProvider) {
 	assert.Equal(t, log4.Meta.Index, i)
 }
 
-func testLogProviderTrim(t *testing.T, p LogProvider) {
+func testLogStoreTrim(t *testing.T, p LogStore) {
 	log1 := testingNewPbLog(1, 1, pb.LogType_COMMAND)
 	log3 := testingNewPbLog(3, 1, pb.LogType_COMMAND)
 	log5 := testingNewPbLog(5, 1, pb.LogType_COMMAND)
@@ -109,7 +109,7 @@ func testLogProviderTrim(t *testing.T, p LogProvider) {
 	assert.Equal(t, log5.Meta.Index, i)
 }
 
-func testLogProviderEntry(t *testing.T, p LogProvider) {
+func testLogStoreEntry(t *testing.T, p LogStore) {
 	log1 := testingNewPbLog(1, 1, pb.LogType_COMMAND)
 	log3 := testingNewPbLog(3, 1, pb.LogType_COMMAND)
 	log5 := testingNewPbLog(5, 1, pb.LogType_CONFIGURATION)
@@ -164,50 +164,60 @@ func testLogProviderEntry(t *testing.T, p LogProvider) {
 	assert.Nil(t, e)
 }
 
-func testLogProvider(t *testing.T, providerFn func() (LogProvider, error)) {
+func testLogStore(t *testing.T, storeFn func() (StableStore, error)) {
 	t.Run("AppendLogs", func(t *testing.T) {
-		provider, err := providerFn()
+		store, err := storeFn()
 		assert.NoError(t, err)
-		if closer, ok := provider.(io.Closer); ok {
+		if closer, ok := store.(io.Closer); ok {
 			defer closer.Close()
 		}
-		testLogProviderAppendLogs(t, provider)
+		testLogStoreAppendLogs(t, store)
 	})
 
 	t.Run("Trim", func(t *testing.T) {
-		provider, err := providerFn()
+		store, err := storeFn()
 		assert.NoError(t, err)
-		if closer, ok := provider.(io.Closer); ok {
+		if closer, ok := store.(io.Closer); ok {
 			defer closer.Close()
 		}
-		testLogProviderTrim(t, provider)
+		testLogStoreTrim(t, store)
 	})
 
 	t.Run("Entry", func(t *testing.T) {
-		provider, err := providerFn()
+		store, err := storeFn()
 		assert.NoError(t, err)
-		if closer, ok := provider.(io.Closer); ok {
+		if closer, ok := store.(io.Closer); ok {
 			defer closer.Close()
 		}
-		testLogProviderEntry(t, provider)
+		testLogStoreEntry(t, store)
 	})
 }
 
-func TestLogProviders(t *testing.T) {
+func TestLogStores(t *testing.T) {
 	t.Run("Internal", func(t *testing.T) {
-		providerFn := func() (LogProvider, error) { return newInternalLogProvider(), nil }
-		testLogProvider(t, providerFn)
+		storeFn := func() (StableStore, error) {
+			store, err := newInternalStore()
+			if err != nil {
+				return nil, err
+			}
+			return store, nil
+		}
+		testLogStore(t, storeFn)
 	})
 
 	t.Run("Bolt", func(t *testing.T) {
-		providerFn := func() (LogProvider, error) {
+		storeFn := func() (StableStore, error) {
 			b := make([]byte, 8)
 			if _, err := rand.Read(b); err != nil {
 				return nil, err
 			}
 			dbPath := filepath.Join(t.TempDir(), fmt.Sprintf("test_%s.db", base64.URLEncoding.EncodeToString(b)))
-			return NewBoltLogProvider(dbPath), nil
+			store, err := NewBoltStore(dbPath)
+			if err != nil {
+				return nil, err
+			}
+			return store, nil
 		}
-		testLogProvider(t, providerFn)
+		testLogStore(t, storeFn)
 	})
 }

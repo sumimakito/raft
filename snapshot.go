@@ -40,7 +40,7 @@ type SnapshotSink interface {
 	Cancel() error
 }
 
-type SnapshotProvider interface {
+type SnapshatStore interface {
 	Create(index, term uint64, c *pb.Configuration, cIndex uint64) (SnapshotSink, error)
 	List() ([]SnapshotMeta, error)
 	Open(id string) (Snapshot, error)
@@ -201,7 +201,7 @@ func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
 		return nil, err
 	}
 
-	sink, err := s.server.snapshotProvider.Create(stmsSnapshot.Index, stmsSnapshot.Term, c.Configuration, c.LogIndex())
+	sink, err := s.server.snapshotStore.Create(stmsSnapshot.Index, stmsSnapshot.Term, c.Configuration, c.LogIndex())
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +238,7 @@ func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
 func (s *snapshotService) Restore(snapshotId string) (bool, error) {
 	s.server.logger.Infow("ready to restore snapshot",
 		logFields(s.server, zap.String("snapshot_id", snapshotId))...)
-	snapshot, err := s.server.snapshotProvider.Open(snapshotId)
+	snapshot, err := s.server.snapshotStore.Open(snapshotId)
 	if err != nil {
 		// It's recoverable if errors happen here.
 		return false, err
@@ -259,13 +259,13 @@ func (s *snapshotService) Restore(snapshotId string) (bool, error) {
 		return false, err
 	}
 
-	if err := s.server.logProvider.Restore(snapshotMeta); err != nil {
+	if err := s.server.logStore.Restore(snapshotMeta); err != nil {
 		s.server.logger.Panicw("error occurred while triming logs during restoration",
 			logFields(s.server, zap.Error(err))...)
 	}
 
-	s.server.setFirstLogIndex(Must2(s.server.logProvider.FirstIndex()))
-	s.server.setLastLogIndex(Must2(s.server.logProvider.LastIndex()))
+	s.server.setFirstLogIndex(Must2(s.server.logStore.FirstIndex()))
+	s.server.setLastLogIndex(Must2(s.server.logStore.LastIndex()))
 
 	s.server.commitAndApply(snapshotMeta.Index())
 

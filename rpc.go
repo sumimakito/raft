@@ -85,11 +85,11 @@ func (h *rpcHandler) AppendEntries(
 	}
 
 	if request.PrevLogIndex > 0 {
-		if h.server.logProvider.withinCompacted(request.PrevLogIndex) {
+		if h.server.logStore.withinCompacted(request.PrevLogIndex) {
 			h.server.logger.Panicw("previous log index is compacted by the snapshot",
 				logFields(h.server, "request_id", requestID, "request", request)...)
 		}
-		prevLogMeta, err := h.server.logProvider.Meta(request.PrevLogIndex)
+		prevLogMeta, err := h.server.logStore.Meta(request.PrevLogIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +110,7 @@ func (h *rpcHandler) AppendEntries(
 				if e.Meta.Index > lastLogIndex {
 					break
 				}
-				log, err := h.server.logProvider.Entry(e.Meta.Index)
+				log, err := h.server.logStore.Entry(e.Meta.Index)
 				if err != nil {
 					return nil, err
 				}
@@ -125,7 +125,7 @@ func (h *rpcHandler) AppendEntries(
 				firstAppendArrayIndex = i + 1
 			}
 			if firstCleanUpIndex > 0 {
-				if err := h.server.logProvider.TrimSuffix(firstCleanUpIndex - 1); err != nil {
+				if err := h.server.logStore.TrimSuffix(firstCleanUpIndex - 1); err != nil {
 					// Return errors here should produce no side effects
 					return nil, err
 				}
@@ -135,7 +135,7 @@ func (h *rpcHandler) AppendEntries(
 		for i := firstAppendArrayIndex; i < len(request.Entries); i++ {
 			bodies = append(bodies, request.Entries[i].Body.Copy())
 		}
-		appendOp := &logProviderAppendOp{FutureTask: newFutureTask[[]*pb.LogMeta](bodies)}
+		appendOp := &logStoreAppendOp{FutureTask: newFutureTask[[]*pb.LogMeta](bodies)}
 		h.server.logOpsCh <- appendOp
 		if _, err := appendOp.Result(); err != nil {
 			return nil, err
@@ -190,7 +190,7 @@ func (h *rpcHandler) RequestVote(
 		response.Term = h.server.currentTerm()
 	}
 
-	lastLog, err := h.server.logProvider.LastEntry(0)
+	lastLog, err := h.server.logStore.LastEntry(0)
 	if err != nil {
 		return nil, err
 	}
@@ -235,12 +235,12 @@ func (h *rpcHandler) InstallSnapshot(
 		return response, nil
 	}
 
-	snapshotMeta, err := h.server.snapshotProvider.DecodeMeta(request.Metadata.SnapshotMetadata)
+	snapshotMeta, err := h.server.snapshotStore.DecodeMeta(request.Metadata.SnapshotMetadata)
 	if err != nil {
 		return nil, err
 	}
 
-	sink, err := h.server.snapshotProvider.Create(
+	sink, err := h.server.snapshotStore.Create(
 		snapshotMeta.Index(), snapshotMeta.Term(),
 		snapshotMeta.Configuration(), snapshotMeta.ConfigurationIndex())
 	if err != nil {

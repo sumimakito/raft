@@ -215,7 +215,7 @@ REPLICATE:
 	// TRY & INSTALL SNAPSHOT
 	{
 		// Check if we have snapshots available
-		metadataList, err := s.r.server.snapshotProvider.List()
+		metadataList, err := s.r.server.snapshotStore.List()
 		if err != nil {
 			s.r.server.logger.Infow("failed listing snapshots",
 				logFields(s.r.server,
@@ -244,7 +244,7 @@ REPLICATE:
 			goto NEXT_MOVE_FORWARD
 		}
 
-		snapshot, err := s.r.server.snapshotProvider.Open(metadataList[0].Id())
+		snapshot, err := s.r.server.snapshotStore.Open(metadataList[0].Id())
 		if err != nil {
 			s.r.server.logger.Infow("failed opening the latest snapshot",
 				logFields(s.r.server,
@@ -422,7 +422,7 @@ func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (string, *p
 	}
 
 	if prevLogIndex := firstIndex - 1; prevLogIndex > 0 {
-		logMeta, err := r.server.logProvider.Meta(prevLogIndex)
+		logMeta, err := r.server.logStore.Meta(prevLogIndex)
 		if err != nil {
 			return "", nil, err
 		}
@@ -437,7 +437,7 @@ func (r *replScheduler) prepareRequest(firstIndex, lastIndex uint64) (string, *p
 
 	request.Entries = make([]*pb.Log, 0, lastLogIndex-firstIndex+1)
 	for i := firstIndex; i <= lastLogIndex; i++ {
-		e, err := r.server.logProvider.Entry(i)
+		e, err := r.server.logStore.Entry(i)
 		if err != nil {
 			return "", nil, err
 		}
