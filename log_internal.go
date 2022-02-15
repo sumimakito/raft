@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/sumimakito/raft/pb"
@@ -60,7 +59,6 @@ func (s *internalLogStore) TrimSuffix(index uint64) error {
 }
 
 func (s *internalLogStore) FirstIndex() (uint64, error) {
-	fmt.Printf("%+v\n", s.logs)
 	if len(s.logs) == 0 {
 		return 0, nil
 	}
