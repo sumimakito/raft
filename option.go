@@ -1,9 +1,6 @@
 package raft
 
 import (
-	"log"
-	"os"
-	"path/filepath"
 	"time"
 
 	"go.uber.org/zap/zapcore"
@@ -12,7 +9,6 @@ import (
 type serverOptions struct {
 	apiServerListenAddress    string
 	apiExtensions             []APIExtension
-	stableStorePath           string
 	electionTimeout           time.Duration
 	followerTimeout           time.Duration
 	logLevel                  zapcore.Level
@@ -24,14 +20,9 @@ type serverOptions struct {
 type ServerOption func(options *serverOptions)
 
 func defaultServerOptions() *serverOptions {
-	wd, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
-	}
 	return &serverOptions{
 		apiServerListenAddress:    "",
 		apiExtensions:             []APIExtension{},
-		stableStorePath:           filepath.Join(wd, "stable.db"),
 		electionTimeout:           1000 * time.Millisecond,
 		followerTimeout:           1000 * time.Millisecond,
 		logLevel:                  zapcore.InfoLevel,
@@ -82,12 +73,6 @@ func APIExtensionOption(extension APIExtension) ServerOption {
 func LogLevelOption(level zapcore.Level) ServerOption {
 	return func(options *serverOptions) {
 		options.logLevel = level
-	}
-}
-
-func StableStorePathOption(path string) ServerOption {
-	return func(options *serverOptions) {
-		options.stableStorePath = path
 	}
 }
 
