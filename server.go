@@ -407,11 +407,10 @@ func (s *Server) internalShutdown(err error) {
 	}
 	s.snapshotService.Stop()
 	// Close the Transport
-	if closer, ok := s.trans.(TransportCloser); ok {
-		closer.Close()
-		s.logger.Infow(fmt.Sprintf("transport %T closed", s.trans), logFields(s)...)
-	} else {
-		s.logger.Infow(fmt.Sprintf("transport %T does not implement interface TransportCloser", s.trans), logFields(s)...)
+	if t, ok := s.trans.(TransportCloser); ok {
+		if err := t.Close(); err != nil {
+			s.logger.Infow(fmt.Sprintf("error occurred closing the Transport: %v", err), logFields(s)...)
+		}
 	}
 	_ = s.logger.Sync()
 	// Send err (if any) to the serve error channel
@@ -809,11 +808,13 @@ func (s *Server) Serve() error {
 		go s.startMetrics(s.opts.metricsExporter)
 	}
 
-	go func() {
-		if err := s.trans.Serve(); err != nil {
-			s.internalShutdown(err)
-		}
-	}()
+	if t, ok := s.trans.(TransportServer); ok {
+		go func() {
+			if err := t.Serve(); err != nil {
+				s.internalShutdown(err)
+			}
+		}()
+	}
 
 	go s.serveAPIServer()
 

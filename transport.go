@@ -17,8 +17,6 @@ type Transport interface {
 	ApplyLog(ctx context.Context, peer *pb.Peer, request *pb.ApplyLogRequest) (*pb.ApplyLogResponse, error)
 
 	RPC() <-chan *RPC
-
-	Serve() error
 }
 
 // TransportConnecter is an optional interface for those implementations
@@ -27,6 +25,10 @@ type TransportConnecter interface {
 	Connect(peer *pb.Peer) error
 	Disconnect(peer *pb.Peer)
 	DisconnectAll()
+}
+
+type TransportServer interface {
+	Serve() error
 }
 
 // TransportCloser is an optional interface for those implementations
