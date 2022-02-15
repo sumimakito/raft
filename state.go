@@ -44,10 +44,10 @@ type serverState struct {
 }
 
 func (s *Server) restoreStates() error {
-	atomic.StoreUint64(&s.serverState.stateCurrentTerm, Must2(s.stable.CurrentTerm()))
-	atomic.StoreUint64(&s.serverState.stateFirstLogIndex, Must2(s.logProvider.FirstIndex()))
-	atomic.StoreUint64(&s.serverState.stateLastLogIndex, Must2(s.logProvider.LastIndex()))
-	s.serverState.stateLastVoteSummary.Store(Must2(s.stable.LastVote()))
+	atomic.StoreUint64(&s.serverState.stateCurrentTerm, Must2(s.stableStore.CurrentTerm()))
+	atomic.StoreUint64(&s.serverState.stateFirstLogIndex, Must2(s.logStore.FirstIndex()))
+	atomic.StoreUint64(&s.serverState.stateLastLogIndex, Must2(s.logStore.LastIndex()))
+	s.serverState.stateLastVoteSummary.Store(Must2(s.stableStore.LastVote()))
 	return nil
 }
 
@@ -64,7 +64,7 @@ func (s *Server) currentTerm() uint64 {
 }
 
 func (s *Server) setCurrentTerm(currentTerm uint64) {
-	Must1(s.stable.SetCurrentTerm(currentTerm))
+	Must1(s.stableStore.SetCurrentTerm(currentTerm))
 	atomic.StoreUint64(&s.serverState.stateCurrentTerm, currentTerm)
 }
 
@@ -93,7 +93,7 @@ func (s *Server) lastVoteSummary() voteSummary {
 
 func (s *Server) setLastVoteSummary(term uint64, candidate string) {
 	summary := voteSummary{term: term, candidate: candidate}
-	Must1(s.stable.SetLastVote(summary))
+	Must1(s.stableStore.SetLastVote(summary))
 	s.serverState.stateLastVoteSummary.Store(summary)
 }
 

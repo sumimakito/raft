@@ -34,12 +34,12 @@ type ServerStates struct {
 }
 
 type ServerCoreOptions struct {
-	Id               string
-	InitialCluster   []*pb.Peer
-	LogProvider      LogProvider
-	StateMachine     StateMachine
-	SnapshotProvider SnapshotProvider
-	Transport        Transport
+	Id             string
+	InitialCluster []*pb.Peer
+	StableStore    StableStore
+	StateMachine   StateMachine
+	SnapshotStore  SnapshatStore
+	Transport      Transport
 }
 
 type serverStepdownChan chan uint64
@@ -73,12 +73,12 @@ type Server struct {
 
 	clusterLeader atomic.Value // *Peer
 
-	stable *stableStore
 	serverState
 	commitState
 
 	serverChannels
 
+	stableStore     StableStore
 	confStore       *configurationStore
 	stateMachine    *stateMachineProxy
 	rpcHandler      *rpcHandler
@@ -121,9 +121,10 @@ func NewServer(coreOpts ServerCoreOptions, opts ...ServerOption) (*Server, error
 			snapshotRestoreCh:      make(chan FutureTask[bool, string], 8),
 			stateMachineSnapshotCh: make(chan FutureTask[*stateMachineSnapshot, any], 16),
 		},
-		trans:            coreOpts.Transport,
-		snapshotProvider: coreOpts.SnapshotProvider,
-		opts:             applyServerOpts(opts...),
+		stableStore:   coreOpts.StableStore,
+		trans:         coreOpts.Transport,
+		snapshotStore: coreOpts.SnapshotStore,
+		opts:          applyServerOpts(opts...),
 	}
 
 	// Set up the logger
