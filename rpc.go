@@ -256,6 +256,10 @@ func (h *rpcHandler) InstallSnapshot(
 		return nil, err
 	}
 
+	if err := request.Reader.Close(); err != nil {
+		return nil, err
+	}
+
 	if err := sink.Close(); err != nil {
 		return nil, err
 	}
