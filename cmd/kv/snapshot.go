@@ -216,15 +216,15 @@ func (s *SnapshotSink) Cancel() error {
 	return nil
 }
 
-type SnapshotProvider struct {
+type SnapshotStore struct {
 	storeDir string
 }
 
-func NewSnapshotProvider(storeDir string) *SnapshotProvider {
-	return &SnapshotProvider{storeDir: storeDir}
+func NewSnapshotStore(storeDir string) *SnapshotStore {
+	return &SnapshotStore{storeDir: storeDir}
 }
 
-func (s *SnapshotProvider) listDirnames() ([]string, []string, error) {
+func (s *SnapshotStore) listDirnames() ([]string, []string, error) {
 	complete := []string{}
 	inprogress := []string{}
 	if err := filepath.WalkDir(s.storeDir, func(path string, d fs.DirEntry, err error) error {
@@ -243,7 +243,7 @@ func (s *SnapshotProvider) listDirnames() ([]string, []string, error) {
 	return complete, inprogress, nil
 }
 
-func (s *SnapshotProvider) sortMeta(dirnames []string) ([]raft.SnapshotMeta, error) {
+func (s *SnapshotStore) sortMeta(dirnames []string) ([]raft.SnapshotMeta, error) {
 	metadataList := []raft.SnapshotMeta{}
 	for _, dirname := range dirnames {
 		file, err := os.Open(filepath.Join(s.storeDir, dirname, "metadata"))
@@ -265,7 +265,7 @@ func (s *SnapshotProvider) sortMeta(dirnames []string) ([]raft.SnapshotMeta, err
 	return metadataList, nil
 }
 
-func (s *SnapshotProvider) Create(index, term uint64, c *pb.Configuration, cIndex uint64) (raft.SnapshotSink, error) {
+func (s *SnapshotStore) Create(index, term uint64, c *pb.Configuration, cIndex uint64) (raft.SnapshotSink, error) {
 	id := raft.NewObjectID().Hex()
 
 	wipDir := filepath.Join(s.storeDir, fmt.Sprintf("inprogress-%s", id))
@@ -288,7 +288,7 @@ func (s *SnapshotProvider) Create(index, term uint64, c *pb.Configuration, cInde
 	return sink, nil
 }
 
-func (s *SnapshotProvider) List() ([]raft.SnapshotMeta, error) {
+func (s *SnapshotStore) List() ([]raft.SnapshotMeta, error) {
 	complete, _, err := s.listDirnames()
 	if err != nil {
 		return nil, err
@@ -296,18 +296,18 @@ func (s *SnapshotProvider) List() ([]raft.SnapshotMeta, error) {
 	return s.sortMeta(complete)
 }
 
-func (s *SnapshotProvider) Open(id string) (raft.Snapshot, error) {
+func (s *SnapshotStore) Open(id string) (raft.Snapshot, error) {
 	return newSnapshot(filepath.Join(s.storeDir, id))
 }
 
-func (s *SnapshotProvider) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {
+func (s *SnapshotStore) DecodeMeta(b []byte) (raft.SnapshotMeta, error) {
 	var pbMetadata kvpb.SnapshotMeta
 	proto.Unmarshal(b, &pbMetadata)
 	return &SnapshotMeta{pbMetadata: &pbMetadata}, nil
 }
 
 // TODO: Refactor this
-func (s *SnapshotProvider) Trim() error {
+func (s *SnapshotStore) Trim() error {
 	complete, inprogress, err := s.listDirnames()
 	if err != nil {
 		return err

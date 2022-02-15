@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -33,6 +34,20 @@ type parsedClusterConfig struct {
 	Peers map[string]string `yaml:"peers"`
 }
 
+func ensureDir(dir string) error {
+	if stat, err := os.Stat(dir); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	} else if !stat.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	return nil
+}
+
 func main() {
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -44,26 +59,23 @@ func main() {
 		log.Panic(err)
 	}
 
+	var apiAddress string
 	var clusterConfig string
 	var logLevelName string
 	var pprofAddr string
-	var snapshotDir string
-	var stableDir string
+	flag.StringVar(&apiAddress, "api", "",
+		"Address for API server to listen on.")
 	flag.StringVar(&clusterConfig, "cluster", "",
 		"Path to the cluster config file.")
-	flag.StringVar(&logLevelName, "logLevel", "info",
+	flag.StringVar(&logLevelName, "log", "info",
 		"Logging level (available: debug, info, warn, error, dpanic, panic, fatal).")
 	flag.StringVar(&pprofAddr, "pprof", "",
 		"Address for pprof to listen on.")
-	flag.StringVar(&snapshotDir, "snapshotDir", filepath.Join(workDir, "snapshot"),
-		"Directory for snapshot files.")
-	flag.StringVar(&stableDir, "stableDir", filepath.Join(workDir, "stable"),
-		"Directory for stable storage files.")
 
 	flag.Parse()
 
-	if flag.NArg() < 2 {
-		fmt.Printf("Usage: %s [OPTIONS] <SERVER_ID> <RPC_ADDRESS> <API_ADDRESS>\n", os.Args[0])
+	if flag.NArg() < 3 {
+		fmt.Printf("Usage: %s [OPTIONS] <SERVER_ID> <RPC_ADDRESS> <DATA_DIR>\n", os.Args[0])
 		fmt.Println()
 		fmt.Println("Options:")
 		flag.PrintDefaults()
@@ -101,50 +113,56 @@ func main() {
 
 	logLevel, ok := logLevels[logLevelName]
 	if !ok {
-		log.Panicf("unknown log level: %s\n", logLevelName)
+		log.Panicf("unknown log level: %s", logLevelName)
 	}
 
 	serverID := flag.Arg(0)
 	rpcServerAddr := flag.Arg(1)
-	apiServerAddr := flag.Arg(2)
+	dataDirArg := flag.Arg(2)
 
-	snapshotDir = raft.PathJoin(workDir, snapshotDir)
-	stableDir = raft.PathJoin(workDir, stableDir)
-
-	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
-		log.Panic(err)
-	}
-	if err := os.MkdirAll(stableDir, 0755); err != nil {
+	dataDir := raft.PathJoin(workDir, dataDirArg)
+	if err := ensureDir(dataDir); err != nil {
 		log.Panic(err)
 	}
 
-	log.Printf("using %s as directory for snapshot files\n", snapshotDir)
-	log.Printf("using %s as directory for stable storage files\n", stableDir)
+	snapshotsDir := filepath.Join(dataDir, "snapshots")
+	if err := ensureDir(snapshotsDir); err != nil {
+		log.Panic(err)
+	}
 
 	transport, err := grpctrans.NewTransport(rpcServerAddr)
 	if err != nil {
 		log.Panic(err)
 	}
 	apiExtension := NewAPIExtension(logger)
-	logProvider := raft.NewBoltLogProvider(filepath.Join(stableDir, fmt.Sprintf("log_%s.db", serverID)))
+	stableStore, err := raft.NewBoltStore(filepath.Join(dataDir, "store.db"))
+	if err != nil {
+		log.Panic(err)
+	}
 	stateMachine := NewStateMachine()
-	snapshotProvider := NewSnapshotProvider(snapshotDir)
+	snapshotStore := NewSnapshotStore(snapshotsDir)
+
+	serverOpts := []raft.ServerOption{
+		raft.ElectionTimeoutOption(1 * time.Second),
+		raft.FollowerTimeoutOption(1 * time.Second),
+		raft.APIExtensionOption(apiExtension),
+		raft.LogLevelOption(logLevel),
+	}
+
+	if apiAddress != "" {
+		serverOpts = append(serverOpts, raft.APIServerListenAddressOption(apiAddress))
+	}
 
 	server, err := raft.NewServer(
 		raft.ServerCoreOptions{
-			Id:               serverID,
-			InitialCluster:   cluster,
-			LogProvider:      logProvider,
-			StateMachine:     stateMachine,
-			SnapshotProvider: snapshotProvider,
-			Transport:        transport,
+			Id:             serverID,
+			InitialCluster: cluster,
+			StableStore:    stableStore,
+			StateMachine:   stateMachine,
+			SnapshotStore:  snapshotStore,
+			Transport:      transport,
 		},
-		raft.ElectionTimeoutOption(1*time.Second),
-		raft.FollowerTimeoutOption(1*time.Second),
-		raft.APIExtensionOption(apiExtension),
-		raft.APIServerListenAddressOption(apiServerAddr),
-		raft.LogLevelOption(logLevel),
-		raft.StableStorePathOption(filepath.Join(stableDir, fmt.Sprintf("stable_%s.db", serverID))),
+		serverOpts...,
 	)
 	if err != nil {
 		log.Panic(err)
