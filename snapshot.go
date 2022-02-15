@@ -218,7 +218,7 @@ func (s *snapshotService) TakeSnapshot() (SnapshotMeta, error) {
 	}
 
 	restoreFuture := newFutureTask[any](snapshotMeta)
-	s.server.stable.server.logRestoreCh <- restoreFuture
+	s.server.logRestoreCh <- restoreFuture
 	if _, err := restoreFuture.Result(); err != nil {
 		return nil, err
 	}
