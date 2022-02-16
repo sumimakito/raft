@@ -790,6 +790,8 @@ func (s *Server) setLeader(leader *pb.Peer) {
 	s.clusterLeader.Store(leader)
 }
 
+// Register is used to register a server to current cluster.
+// ErrInJointConsensus is returned when the server is already in a joint consensus.
 func (s *Server) Register(peer *pb.Peer) error {
 	latest := s.confStore.Latest()
 	next := latest.Current.Copy()

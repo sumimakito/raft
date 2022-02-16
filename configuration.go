@@ -162,9 +162,9 @@ func newConfigurationStore(server *Server) (*configurationStore, error) {
 
 // initiateTransition creates a configuration for joint consensus that combines
 // current and next configuration, and appends the configuration log.
-// Should not be called when the server is already in a joint consensus.
 // When the leader prepares to change the configuration, this should be the only
 // function to call.
+// ErrInJointConsensus is returned when the server is already in a joint consensus.
 func (s *configurationStore) initiateTransition(next *config) error {
 	latest := s.latest.Load().(*configuration)
 	if latest.Joint() {
@@ -187,8 +187,8 @@ func (s *configurationStore) initiateTransition(next *config) error {
 
 // commitTransition creates a new configuration from the next configuration in the
 // configuration for joint consensus and appends the configuration log.
-// Should not be called when the server is not in a joint consensus.
-// Should only be called by Server.commitAndApply().
+// ErrNotInJointConsensus is returned when the server is not in a joint consensus.
+// Should only be called by Server.commitConfiguration().
 func (s *configurationStore) commitTransition() error {
 	latest := s.latest.Load().(*configuration)
 	if !latest.Joint() {
