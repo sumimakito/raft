@@ -14,6 +14,10 @@ type internalTransClientLookup struct {
 	clients map[string]*internalTransClient
 }
 
+func newInternalTransClientLookup() *internalTransClientLookup {
+	return &internalTransClientLookup{clients: map[string]*internalTransClient{}}
+}
+
 func (l *internalTransClientLookup) Get(endpoint string) (*internalTransClient, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
