@@ -12,15 +12,11 @@ import (
 	"github.com/sumimakito/raft/pb"
 )
 
-func testingNewPbLog(index, term uint64, t pb.LogType) *pb.Log {
-	return &pb.Log{Meta: &pb.LogMeta{Index: index, Term: term}, Body: &pb.LogBody{Type: t}}
-}
-
 func testLogStoreAppendLogs(t *testing.T, p LogStore) {
-	log1 := testingNewPbLog(1, 1, pb.LogType_COMMAND)
-	log2 := testingNewPbLog(2, 1, pb.LogType_COMMAND)
-	log3 := testingNewPbLog(3, 1, pb.LogType_CONFIGURATION)
-	log4 := testingNewPbLog(4, 1, pb.LogType_COMMAND)
+	log1 := &pb.Log{Meta: &pb.LogMeta{Index: 1, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
+	log2 := &pb.Log{Meta: &pb.LogMeta{Index: 2, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
+	log3 := &pb.Log{Meta: &pb.LogMeta{Index: 3, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_CONFIGURATION}}
+	log4 := &pb.Log{Meta: &pb.LogMeta{Index: 4, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
 
 	i, err := p.FirstIndex()
 	assert.NoError(t, err)
@@ -52,10 +48,10 @@ func testLogStoreAppendLogs(t *testing.T, p LogStore) {
 }
 
 func testLogStoreTrim(t *testing.T, p LogStore) {
-	log1 := testingNewPbLog(1, 1, pb.LogType_COMMAND)
-	log3 := testingNewPbLog(3, 1, pb.LogType_COMMAND)
-	log5 := testingNewPbLog(5, 1, pb.LogType_COMMAND)
-	log7 := testingNewPbLog(7, 1, pb.LogType_COMMAND)
+	log1 := &pb.Log{Meta: &pb.LogMeta{Index: 1, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
+	log3 := &pb.Log{Meta: &pb.LogMeta{Index: 3, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
+	log5 := &pb.Log{Meta: &pb.LogMeta{Index: 5, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
+	log7 := &pb.Log{Meta: &pb.LogMeta{Index: 7, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
 	p.AppendLogs([]*pb.Log{log1, log3, log5, log7})
 
 	i, err := p.FirstIndex()
@@ -110,10 +106,10 @@ func testLogStoreTrim(t *testing.T, p LogStore) {
 }
 
 func testLogStoreEntry(t *testing.T, p LogStore) {
-	log1 := testingNewPbLog(1, 1, pb.LogType_COMMAND)
-	log3 := testingNewPbLog(3, 1, pb.LogType_COMMAND)
-	log5 := testingNewPbLog(5, 1, pb.LogType_CONFIGURATION)
-	log7 := testingNewPbLog(7, 1, pb.LogType_COMMAND)
+	log1 := &pb.Log{Meta: &pb.LogMeta{Index: 1, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
+	log3 := &pb.Log{Meta: &pb.LogMeta{Index: 3, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
+	log5 := &pb.Log{Meta: &pb.LogMeta{Index: 5, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_CONFIGURATION}}
+	log7 := &pb.Log{Meta: &pb.LogMeta{Index: 7, Term: 1}, Body: &pb.LogBody{Type: pb.LogType_COMMAND}}
 
 	e, err := p.Entry(1)
 	assert.NoError(t, err)
