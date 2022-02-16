@@ -184,7 +184,7 @@ func (h *rpcHandler) RequestVote(
 	// (5.1) Update current term and convert to follower.
 	if request.Term > h.server.currentTerm() {
 		if h.server.role() != Follower {
-			h.server.stepdownFollower(nilPeer)
+			h.server.stepdownFollower(pb.NilPeer)
 		}
 		h.server.alterTerm(request.Term)
 		response.Term = h.server.currentTerm()

@@ -2,6 +2,8 @@ package pb
 
 import "go.uber.org/zap/zapcore"
 
+var NilPeer = &Peer{Id: "", Endpoint: ""}
+
 func (p *Peer) Copy() *Peer {
 	return &Peer{Id: p.Id, Endpoint: p.Endpoint}
 }

@@ -491,7 +491,7 @@ func (s *Server) runLoopLeader() {
 			t.setResult(s.stateMachine.Snapshot())
 		case term := <-stepdownCh:
 			// We'll update the leader in other loops
-			s.stepdownFollower(nilPeer)
+			s.stepdownFollower(pb.NilPeer)
 			s.alterTerm(term)
 			return
 		case t := <-s.snapshotRestoreCh:
@@ -777,15 +777,15 @@ func (s *Server) Info() ServerInfo {
 }
 
 func (s *Server) Leader() *pb.Peer {
-	if v := s.clusterLeader.Load(); v != nil && v != nilPeer {
+	if v := s.clusterLeader.Load(); v != nil && v != pb.NilPeer {
 		return v.(*pb.Peer)
 	}
-	return nilPeer
+	return pb.NilPeer
 }
 
 func (s *Server) setLeader(leader *pb.Peer) {
 	if leader == nil {
-		leader = nilPeer
+		leader = pb.NilPeer
 	}
 	s.clusterLeader.Store(leader)
 }
