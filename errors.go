@@ -27,4 +27,8 @@ var (
 
 	// ErrInJointConsensus indicates that the server is not in a joint consensus.
 	ErrNotInJointConsensus = errors.New("not in a joint consensus")
+
+	ErrUnknownTransporClient = errors.New("unknown transport client")
+
+	ErrUnknownRPC = errors.New("unknown RPC")
 )
