@@ -2,10 +2,10 @@ package raft
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/sumimakito/raft/pb"
 )
 
@@ -115,7 +115,7 @@ func (t *internalTransport) AppendEntries(
 ) (*pb.AppendEntriesResponse, error) {
 	client, ok := t.lookup.Get(peer.Endpoint)
 	if !ok {
-		return nil, fmt.Errorf("client %s not registered", peer.Endpoint)
+		return nil, errors.Wrapf(ErrUnknownTransporClient, "client %s not registered", peer.Endpoint)
 	}
 	response, err := client.AppendEntries(ctx, request)
 	if err != nil {
@@ -129,7 +129,7 @@ func (t *internalTransport) RequestVote(
 ) (*pb.RequestVoteResponse, error) {
 	client, ok := t.lookup.Get(peer.Endpoint)
 	if !ok {
-		return nil, fmt.Errorf("client %s not registered", peer.Endpoint)
+		return nil, errors.Wrapf(ErrUnknownTransporClient, "client %s not registered", peer.Endpoint)
 	}
 	response, err := client.RequestVote(ctx, request)
 	if err != nil {
@@ -143,7 +143,7 @@ func (t *internalTransport) InstallSnapshot(
 ) (*pb.InstallSnapshotResponse, error) {
 	client, ok := t.lookup.Get(peer.Endpoint)
 	if !ok {
-		return nil, fmt.Errorf("client %s not registered", peer.Endpoint)
+		return nil, errors.Wrapf(ErrUnknownTransporClient, "client %s not registered", peer.Endpoint)
 	}
 	response, err := client.InstallSnapshot(ctx, requestMeta, reader)
 	if err != nil {
@@ -157,7 +157,7 @@ func (t *internalTransport) ApplyLog(
 ) (*pb.ApplyLogResponse, error) {
 	client, ok := t.lookup.Get(peer.Endpoint)
 	if !ok {
-		return nil, fmt.Errorf("client %s not registered", peer.Endpoint)
+		return nil, errors.Wrapf(ErrUnknownTransporClient, "client %s not registered", peer.Endpoint)
 	}
 	response, err := client.ApplyLog(ctx, request)
 	if err != nil {
